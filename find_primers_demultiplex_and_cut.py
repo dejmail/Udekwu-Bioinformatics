@@ -46,11 +46,6 @@ class Demultiplex(object):
         self.inverted_iupac = self.invert_regex_pattern(self.iupac)
         self.open_file_list = set()
         
-        print("Instantiating class")        
-        
-        #self.name = name
-        #self.balance = balance
-
     def setup_logging(self,
                       default_path='logging.yaml',
                       default_level=logging.DEBUG,
@@ -147,6 +142,11 @@ class Demultiplex(object):
         """
         sample_primer_dict = {}
         file_list = []
+
+        
+        if not opts:
+            sys.exit("sequence file not getting to main method")
+        self.logger.info("incoming cmdline opts - {0}".format(opts))
     
         self.logger.info("Forward primers found: {0}".format(self.f_count))
         self.logger.info("Reverse primers found: {0}".format(self.r_count))        
@@ -162,12 +162,15 @@ class Demultiplex(object):
         output_directory = opts.o
        
         # extract .gz to temp file location
-        if kwargs is not None:
-            if 'gzipFilename' in kwargs:
-                sequence_file = kwargs.get('gzipFilename')
+        if 'gzipFilename' in kwargs:
+            self.logger.info("Incoming kwargs detected...gzip file?")
+            sequence_file = kwargs.get('gzipFilename')
         else:
+            self.logger.info("No kwargs, normal Fastq file")
             sequence_file = opts.f
-
+        
+        self.logger.info("opt.f.name - {0}".format(sequence_file))
+        self.logger.info("sequences being read from {0}".format(sequence_file.name))
     
         #extract the relevant data from the metadata file
         header, mapping_data, run_description, errors, warnings = process_id_map(metafile)
@@ -457,17 +460,20 @@ if __name__ == '__main__':
     try:
         results = parser.parse_args()
 
-        if not (results.m or results.f):
-            parser.error("You have to specify -m and -f files, and -o output directory!")
+        if not (results.m or results.f or results.o):
+            parser.error("You have to specify the -m and -f files, and -o output directory!")
         else:
             if check_if_path_exists(results.o) == False:
                 sys.exit("Something went wrong creating the path.")
             if results.f.name[-3:] == '.gz':
+                
                 fname = extract_file(results.f.name)
                 start_run = Demultiplex()
                 start_run.run_demultiplex_and_trim(results, gzipFilename=fname)
                 os.remove(fname)
             else:
+                print("input sequence file - {0}".format(results.f.name))
+                print("input metadata file - {0}".format(results.m.name))
                 start_run = Demultiplex()
                 start_run.run_demultiplex_and_trim(results)
     except IOError as e:
