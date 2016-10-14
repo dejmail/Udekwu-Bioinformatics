@@ -11,13 +11,12 @@ import argparse
 import gzip
 import random, string
 
-from cogent.parse.fastq import MinimalFastqParser
 from skbio.sequence import DNA
  
 from Bio.Seq import Seq
 from Bio import SeqIO
+from Bio import SeqRecord
 from Bio.Alphabet import IUPAC
-from StringIO import StringIO
         
 from qiime.check_id_map import process_id_map
 import subprocess
@@ -170,7 +169,7 @@ class Demultiplex(object):
             sequence_file = opts.f
         
         self.logger.info("opt.f.name - {0}".format(sequence_file))
-        self.logger.info("sequences being read from {0}".format(sequence_file.name))
+        self.logger.info("sequences being read from {0}".format(sequence_file))
     
         #extract the relevant data from the metadata file
         header, mapping_data, run_description, errors, warnings = process_id_map(metafile)
@@ -186,7 +185,11 @@ class Demultiplex(object):
             sample_primer_dict[sample_id[0].replace(":","_")] = (sample_id[2], sample_id[4])
             file_list.append(sample_id[0].replace(":","_"))
             
-        for label,seq,qual in MinimalFastqParser(sequence_file, strict=False):
+        for record in SeqIO.parse(handle=sequence_file,format="fastq-sanger"):
+            label = record.id
+            seq = record.seq
+            qual = record.letter_annotations["phred_quality"]
+        
             self.logger.debug(dir(seq))
             self.total_seqs += 1
             start_slice = 0
@@ -196,18 +199,18 @@ class Demultiplex(object):
             
             for curr_primer in forward_primers:
                 # regex search using curr_primer pattern
-                if curr_primer.search(seq):
+                if curr_primer.search(str(seq)):
                     self.logger.debug("found F primer pattern...{0}".format(curr_primer.pattern))        
                     f_primer_seq = curr_primer
-                    start_slice = int(curr_primer.search(seq).span()[1])
+                    start_slice = int(curr_primer.search(str(seq)).span()[1])
                     self.f_count += 1
                     f_primer_found = True
             for curr_primer in reverse_primers:
-                if curr_primer.search(seq):
+                if curr_primer.search(str(seq)):
                     self.logger.debug("found R primer pattern...{0}".format(curr_primer.pattern))
                     r_primer_seq = curr_primer
                     # span() gives start and end coordinates
-                    end_slice = int(curr_primer.search(seq).span()[0])
+                    end_slice = int(curr_primer.search(str(seq)).span()[0])
                     self.r_count += 1
                     r_primer_found = True
             
@@ -240,14 +243,27 @@ class Demultiplex(object):
             
             if (f_primer_found == True and r_primer_found == True):
                 self.logger.debug("Both F and R primers found")
-                self.logger.debug(curr_seq, "\n", f_primer_seq.pattern,
+                self.logger.debug(seq, "\n", f_primer_seq.pattern,
                                   start_slice, end_slice, r_primer_seq.pattern)
                 self.both_primers_count += 1
                 # get filename from reversing the regex pattern
                 filename = self.get_sample_id_from_primer_sequence(sample_primer_dict, f_primer_seq.pattern, r_primer_seq.pattern)
-                filename = str(filename) + ".fq"                
+                filename = str(filename) + ".fq"
+
+                if "None.fq" == filename[-7:]:
+
+                    self.logger.debug("Failed to get filename from primer sheet.\
+                                  {0}\n{1}\n{2}\n{3}\n".format(label, 
+                                  f_primer_seq.pattern,
+                                  r_primer_seq.pattern,
+                                  str(seq)))
+                    incorrect_primer_pairs_filename = ''.join(filename[:-7] + "incorrect_primer_pairing.fq")
+                    with open(incorrect_primer_pairs_filename, 'a') as f:
+                        f.write("new filename...{0}".format(filename))
+                
+                
                 filename = os.path.join(output_directory, filename)
-                record = self.return_fastq_seqio_object(curr_seq,label,curr_qual,filename)                
+                record = self.return_fastq_seqio_object(seq,label,qual,filename)                
                 self.write_fastq_sequence(filename, record)
     
         self.logger.info("__________________________")
@@ -375,17 +391,14 @@ class Demultiplex(object):
 
     
     def return_fastq_seqio_object(self, seq,label,qual,filename):
-        
+    
         '''Construct Biopython SeqIO object for each of the fastq reads'''
-        
-        
-        fastq_string = ("@{0}\n{1}\n+{0}\n{2}\n".format(label+":sample_id_" + filename, seq, qual))
-        try:
-            record = SeqIO.read(StringIO(fastq_string), "fastq")
-            return record
-        except ValueError as self.e:
-            self.logger.debug(e.args, label)
-            return None   
+    
+        record = SeqRecord.SeqRecord(id=label+":sample_id_" + filename, 
+                                     seq=seq, 
+                                     letter_annotations={'phred_quality' : qual})
+
+        return record
 
 
 def check_if_path_exists(path):
