@@ -43,6 +43,7 @@ class Demultiplex(object):
                       'B': '[CGT]','D': '[AGT]', 'H': '[ACT]',\
                       'V': '[ACG]', 'N': '[ACGT]'}
         self.inverted_iupac = self.invert_regex_pattern(self.iupac)
+        
         self.open_file_list = set()
         
     def setup_logging(self,
@@ -122,14 +123,43 @@ class Demultiplex(object):
             that the output is correctly formatted when written to file.        
         """
         
-        self.out_seqs = open(filename, 'a')                    
         try:
             #construct a SeqIO object, which checks for proper quality scores and formatting
-            SeqIO.write(fastq_entry, self.out_seqs, "fastq")
-            self.out_seqs.close()
+            with open(filename, 'a') as self.out_seqs:
+                SeqIO.write(fastq_entry, self.out_seqs, "fastq")
         except TypeError as self.e:
             self.quality_errors += 1
             self.logger.debug(fastq_entry, e.args, e.message)
+    
+    def regex_search_through_sequence(self, search_string, regex_search_list):
+        
+        '''' Takes in a regex pattern list, and using the list items searches 
+        through a string until it either finds a match or not. 
+        
+        Returns True/False (default False), the start and end position on the string and the
+        regex pattern'''
+        
+        
+#        for curr_primer in forward_primers:
+#            # regex search using curr_primer pattern
+#            if curr_primer.search(str(seq)):
+#                self.logger.debug("found F primer pattern...{0}".format(curr_primer.pattern))        
+#                f_primer_seq = curr_primer
+#                start_slice = int(curr_primer.search(str(seq)).span()[1])
+#                self.f_count += 1
+#                f_primer_found = True
+                
+        string_found = False
+        start_slice=int
+        for curr_pattern in regex_search_list:
+            match = curr_pattern.search(search_string)
+            if match:
+                self.logger.debug("found pattern...{0}".format(curr_pattern.pattern))        
+                #f_primer_seq = curr_primer
+                start_slice = int(match.start())
+                string_found = True
+                
+        return {'string_found' : string_found, 'pattern' : curr_pattern.pattern,'position' : start_slice}
             
     def run_demultiplex_and_trim(self, opts, **kwargs):
         
@@ -194,17 +224,22 @@ class Demultiplex(object):
             self.total_seqs += 1
             start_slice = 0
             end_slice = -1
-            f_primer_found = False
-            r_primer_found = False
             
-            for curr_primer in forward_primers:
-                # regex search using curr_primer pattern
-                if curr_primer.search(str(seq)):
-                    self.logger.debug("found F primer pattern...{0}".format(curr_primer.pattern))        
-                    f_primer_seq = curr_primer
-                    start_slice = int(curr_primer.search(str(seq)).span()[1])
-                    self.f_count += 1
-                    f_primer_found = True
+            r_primer_found = False
+            #f_primer_found = forward_primer_search.string_found
+            
+            forward_primer_search = self.regex_search_through_sequence(str(seq), forward_primers)
+            self.logger.debug(forward_primer_search.viewitems())
+#            for curr_primer in forward_primers:
+#                # regex search using curr_primer pattern
+#                if curr_primer.search(str(seq)):
+#                    self.logger.debug("found F primer pattern...{0}".format(curr_primer.pattern))        
+#                    f_primer_seq = curr_primer
+#                    start_slice = int(curr_primer.search(str(seq)).span()[1])
+#                    self.f_count += 1
+#                    f_primer_found = True
+
+
             for curr_primer in reverse_primers:
                 if curr_primer.search(str(seq)):
                     self.logger.debug("found R primer pattern...{0}".format(curr_primer.pattern))
@@ -215,46 +250,46 @@ class Demultiplex(object):
                     r_primer_found = True
             
             #  created a clipped sequence and quality score
-            curr_seq = seq[start_slice:end_slice]
-            curr_qual = qual[start_slice:end_slice]
+            #curr_seq = seq[start_slice:end_slice]
+            #curr_qual = qual[start_slice:end_slice]
             
             # can change this value so it can be specified from cmdline
-            if len(curr_seq) < 1:
-                self.no_seq_left += 1
-                continue
+            #if len(curr_seq) < 1:
+            #    self.no_seq_left += 1
+            #    continue
     
-            if (f_primer_found == True) and (r_primer_found == False):
+            if (forward_primer_search.get('string_found') == True) and (r_primer_found == False):
                 self.logger.debug("Only forward primer found")
                 self.f_only_count += 1
                 fastq_entry = self.return_fastq_seqio_object(seq,"OnlyF", qual,"Only_F")
                 self.write_fastq_sequence(os.path.join(output_directory, "Only_F.fq"), fastq_entry )
                 
-            if (f_primer_found == False) and (r_primer_found == True):
+            if (forward_primer_search.get('string_found') == False) and (r_primer_found == True):
                 self.logger.debug("Only reverse primer found")
                 self.r_only_count += 1
                 fastq_entry = self.return_fastq_seqio_object(seq,"OnlyR", qual,"Only_R")
                 self.write_fastq_sequence(os.path.join(output_directory, "Only_R.fq"), fastq_entry )
             
-            if (f_primer_found == False and r_primer_found == False):
+            if (forward_primer_search.get('string_found') == False) and (r_primer_found == False):
                 self.logger.debug("Neither F nor R primer found")
                 self.unmapped_count += 1
                 fastq_entry = self.return_fastq_seqio_object(seq,"None", qual,"None")
                 self.write_fastq_sequence(os.path.join(output_directory, "None.fq"), fastq_entry )                
             
-            if (f_primer_found == True and r_primer_found == True):
+            if (forward_primer_search.get('string_found') == True) and (r_primer_found == True):
                 self.logger.debug("Both F and R primers found")
-                self.logger.debug(seq, "\n", f_primer_seq.pattern,
+                self.logger.debug(seq, "\n", forward_primer_search.get('pattern'),
                                   start_slice, end_slice, r_primer_seq.pattern)
                 self.both_primers_count += 1
                 # get filename from reversing the regex pattern
-                filename = self.get_sample_id_from_primer_sequence(sample_primer_dict, f_primer_seq.pattern, r_primer_seq.pattern)
+                filename = self.get_sample_id_from_primer_sequence(sample_primer_dict, forward_primer_search.get('pattern'), r_primer_seq.pattern)
                 filename = str(filename) + ".fq"
 
                 if "None.fq" == filename[-7:]:
-
+                    self.unmapped_count += 1
                     self.logger.debug("Failed to get filename from primer sheet.\
                                   {0}\n{1}\n{2}\n{3}\n".format(label, 
-                                  f_primer_seq.pattern,
+                                  forward_primer_search.get('pattern'),
                                   r_primer_seq.pattern,
                                   str(seq)))
                     incorrect_primer_pairs_filename = ''.join(filename[:-7] + "incorrect_primer_pairing.fq")
@@ -267,8 +302,6 @@ class Demultiplex(object):
                 self.write_fastq_sequence(filename, record)
     
         self.logger.info("__________________________")
-        self.logger.info("Forward primers found: {0}".format(self.f_count))
-        self.logger.info("Reverse primers found: {0}".format(self.r_count))        
         self.logger.info("Samples successfully mapped F+R found): {0}".format(self.both_primers_count))        
         self.logger.info("Only forward primer found: {0}".format(self.f_only_count))
         self.logger.info("Only reverse primer found: {0}".format(self.r_only_count))
@@ -467,9 +500,12 @@ if __name__ == '__main__':
     primer sequences are not present in the sequence header and the files were not demultiplexed on the machine \
     it was run on. It takes a metadata file (QIIME specific), a merged fastq file')
 
-    parser.add_argument('-m', metavar='metadata file', required=True, type=argparse.FileType('r'))
-    parser.add_argument('-f', metavar='sequence file - fastq only, OR gzipped', required=True, type=argparse.FileType('r'))
-    parser.add_argument('-o', metavar='output directory', required=True ,action='store')
+    parser.add_argument('--m', metavar='metadata file', required=True, type=argparse.FileType('r'))
+    parser.add_argument('--f', metavar='sequence file - fastq only, OR gzipped', required=True, type=argparse.FileType('r'))
+    ##parser.add_argument('--r', metavar='reverse sequence file', required=True, type=argparse.FileType('r'))
+    parser.add_argument('--l', metavar='search length', required=False, action='store', help='Length or piece of primer in 5bp from 5prime end for search')
+    parser.add_argument('--reverse_complement', metavar='RevComp', required=True, action='store', help='Whether to check in both orientations or not')
+    parser.add_argument('--o', metavar='output directory', required=True ,action='store')
     try:
         results = parser.parse_args()
 
