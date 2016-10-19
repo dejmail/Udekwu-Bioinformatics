@@ -11,20 +11,21 @@ from re import compile
 import argparse
 import gzip
 import random, string
+from collections import namedtuple
 
 from skbio.sequence import DNA
  
 from Bio.Seq import Seq
 from Bio import SeqIO
 from Bio import SeqRecord
-from Bio.Alphabet import IUPAC
+from Bio.Alphabet import IUPAC, generic_dna
         
 from qiime.check_id_map import process_id_map
 import subprocess
 
 class Demultiplex(object):
     
-    def __init__(self, logger=None):
+    def __init__(self, opts, logger=None):
         """
         """
         self.setup_logging()
@@ -43,10 +44,40 @@ class Demultiplex(object):
                       'W': '[AT]', 'K': '[GT]', 'M': '[AC]',\
                       'B': '[CGT]','D': '[AGT]', 'H': '[ACT]',\
                       'V': '[ACG]', 'N': '[ACGT]'}
+        self.r1_filename = opts.f
+        self.r2_filename = opts.r
         self.inverted_iupac = self.invert_regex_pattern(self.iupac)
+        self.pe_reads = self.index_sequences([self.r1_filename, self.r2_filename])
         
         self.open_file_list = set()
+    
+    def number_of_lines_in_file(self, filename):
+            
+        with open(filename) as f:
+            for i, l in enumerate(f):
+                pass
+        self.logger.debug("{0} has {1} lines".format(filename, str(i+1)))
+        return i + 1
         
+    def index_sequences(self, filenames):
+
+        if ("R1" in filenames[0].name) and ("R2" in filenames[1].name):
+            
+            self.r1_number_of_lines = self.number_of_lines_in_file(filenames[0].name)
+            self.logger.debug("thus {0} reads".format(self.r1_number_of_lines/4))
+            self.r1_sequences = SeqIO.index(filenames[0].name, 'fastq', generic_dna)
+        
+            self.r2_number_of_lines = self.number_of_lines_in_file(filenames[1].name)
+            self.logger.debug("thus {0} reads".format(self.r2_number_of_lines/4))
+            self.r2_sequences = SeqIO.index(filenames[1].name, 'fastq', generic_dna)
+            
+            self.pe_reads = {'R1' : self.r1_sequences, 'R2' :self.r2_sequences}
+            return self.pe_reads
+        else: 
+            raise IOError("Can't find R1 or R2 in filenames")
+            return None
+    
+
     def setup_logging(self,
                       default_path='logging.yaml',
                       default_level=logging.DEBUG,
@@ -116,7 +147,13 @@ class Demultiplex(object):
                                                     symbol in curr_primer])))
          
         return forward_primers, reverse_primers
+    
+    def progress_meter():
         
+        import progressbar2
+    
+        return None
+    
     def write_fastq_sequence(self, filename, fastq_entry):
         
         """ Takes in a filename and fastq entry as text and constructs
@@ -131,6 +168,17 @@ class Demultiplex(object):
         except TypeError as e:
             self.quality_errors += 1
             self.logger.debug(fastq_entry, e.args, e.message)
+            
+    def process_incoming_reads(self, sequence_file, orientation):
+        
+        for record in SeqIO.parse(handle=sequence_file,format="fastq-sanger"):
+            label = record.id
+            seq = record.seq
+            seq_rc = record.seq.reverse_complement()
+            qual = record.letter_annotations["phred_quality"]
+        
+            return None
+        
     
     def regex_search_through_sequence(self, search_string, regex_search_list):
         
@@ -142,28 +190,12 @@ class Demultiplex(object):
         Returns True/False (default False), the start and end position on the string and the
         regex pattern'''
         
-        
-#        for curr_primer in forward_primers:
-#            # regex search using curr_primer pattern
-#            if curr_primer.search(str(seq)):
-#                self.logger.debug("found F primer pattern...{0}".format(curr_primer.pattern))        
-#                f_primer_seq = curr_primer
-#                start_slice = int(curr_primer.search(str(seq)).span()[1])
-#                self.f_count += 1
-#                f_primer_found = True
-        #start_position = int
-        #end_position = int    
-        
-        
-        #start_slice=int
+        # must check the positions of the primer, may need to adjuset by 1 + or -
         
         for curr_pattern in regex_search_list:
             match = re.search(curr_pattern, search_string)
             if match:
-                self.logger.debug("found pattern...{0}".format(curr_pattern.pattern))        
-                #f_primer_seq = curr_primer
-                #start_position = match.start()
-                #end_position = match.end()
+                self.logger.debug("found pattern...{0}".format(curr_pattern.pattern))
                 
                 return {'string_found' : True, 
                         'pattern' : curr_pattern.pattern,
@@ -189,21 +221,12 @@ class Demultiplex(object):
         if not opts:
             sys.exit("command line options not getting to main method")
         self.logger.info("incoming cmdline opts - {0}".format(opts))
-    
-#        self.logger.info("Forward primers found: {0}".format(self.f_count))
-#        self.logger.info("Reverse primers found: {0}".format(self.r_count))        
-#        self.logger.info("Samples successfully mapped F+R found): {0}".format(self.both_primers_count))        
-#        self.logger.info("Only forward primer found: {0}".format(self.f_only_count))
-#        self.logger.info("Only reverse primer found: {0}".format(self.r_only_count))
-#        self.logger.info("No seq left after truncation: {0}".format(self.no_seq_left))
-#        self.logger.info("Sequences with errors in quality scores: {0}".format(self.quality_errors))
-#        self.logger.info("Sequences not mapped: {0}".format(self.unmapped_count))
-#        self.logger.info("Total sequences checked: {0}".format(self.total_seqs))
 
         metafile = opts.m
         output_directory = opts.o
         filename=""
-       
+        check_both_orientations = opts.reverse_complement
+        
         # extract .gz to temp file location
         if 'gzipFilename' in kwargs:
             self.logger.info("Incoming kwargs detected...gzip file?")
@@ -214,6 +237,7 @@ class Demultiplex(object):
         
         self.logger.info("opt.f.name - {0}".format(sequence_file))
         self.logger.info("sequences being read from {0}".format(sequence_file))
+        self.logger.info("checking in both sequence orientations = {0}".format(check_both_orientations))
     
         #extract the relevant data from the metadata file
         header, mapping_data, run_description, errors, warnings = process_id_map(metafile)
@@ -232,30 +256,40 @@ class Demultiplex(object):
         for record in SeqIO.parse(handle=sequence_file,format="fastq-sanger"):
             label = record.id
             seq = record.seq
+            seq_rc = record.seq.reverse_complement()
             qual = record.letter_annotations["phred_quality"]
         
             self.logger.debug("processing seq ID - {0}".format(label))
             self.total_seqs += 1
             #start_slice = 0
             #end_slice = -1
-            
-            #r_primer_found = False
-            #f_primer_found =     .string_found
+                        
             self.logger.debug("Starting through the forward patterns...")
             forward_primer_search = self.regex_search_through_sequence(str(seq), 
-                                                                      forward_primer_patterns)            
-            #forward_primer_search= {'string_found' : False}
+                                                                       forward_primer_patterns)
             self.logger.debug("Starting through the reverse patterns...")
             reverse_primer_search = self.regex_search_through_sequence(str(seq), 
                                                                        reverse_primer_patterns)
             
-            if (forward_primer_search.get('string_found') == True):
-                self.logger.debug("forward found - {0}..".format(forward_primer_search.viewitems()))
-            elif (reverse_primer_search.get('string_found') == True):
-                self.logger.debug("reverse found - {0}..".format(reverse_primer_search.viewitems()))
-                
             f_primer_found = forward_primer_search.get('string_found')
             r_primer_found = reverse_primer_search.get('string_found')
+            
+            self.logger.debug('F primer - {0}...R primer - {1}...Check RC - {2}'.format(f_primer_found, 
+                              r_primer_found, check_both_orientations))
+            
+            if (check_both_orientations == 'True') and not (f_primer_found == True) and not (r_primer_found == True):                    
+                #raw_input()
+                self.logger.debug('Looking for F primer in reverse complement')
+                forward_primer_search = self.regex_search_through_sequence(str(seq_rc), forward_primer_patterns)
+                
+                self.logger.debug('Looking for R primer in reverse complement')
+                reverse_primer_search = self.regex_search_through_sequence(str(seq_rc), 
+                                                                       reverse_primer_patterns)
+                f_primer_found = forward_primer_search.get('string_found')
+                r_primer_found = reverse_primer_search.get('string_found')
+                #forward_primer_search= {'string_found' : False}
+                
+            
 #            for curr_primer in forward_primers:
 #                # regex search using curr_primer pattern
 #                if curr_primer.search(str(seq)):
@@ -393,7 +427,8 @@ class Demultiplex(object):
             To be able to match the sample_id and the associated primer names and 
             sequences with the correct reads, one needs to invert the regex pattern
             that was used to find the primers used as they are not specified in
-            the sequence header.
+            the sequence header. The pattern may also have ambiguities from wobble
+            bases.
             
             This is accomplished by making a new IUPAC dictionary and simply 
             swapping the keys and values of the original iupac dictionary. 
@@ -545,7 +580,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--m', metavar='metadata file', required=True, type=argparse.FileType('r'))
     parser.add_argument('--f', metavar='sequence file - fastq only, OR gzipped', required=True, type=argparse.FileType('r'))
-    ##parser.add_argument('--r', metavar='reverse sequence file', required=True, type=argparse.FileType('r'))
+    parser.add_argument('--r', metavar='reverse sequence file', required=True, type=argparse.FileType('r'))
     parser.add_argument('--l', metavar='search length', required=False, action='store', help='Length or piece of primer in 5bp from 5prime end for search')
     parser.add_argument('--reverse_complement', metavar='RevComp', required=True, action='store', help='Whether to check in both orientations or not')
     parser.add_argument('--o', metavar='output directory', required=True ,action='store')
@@ -564,9 +599,10 @@ if __name__ == '__main__':
                 start_run.run_demultiplex_and_trim(results, gzipFilename=fname)
                 os.remove(fname)
             else:
-                print("input sequence file - {0}".format(results.f.name))
+                print("R1 sequence file - {0}".format(results.f.name))
+                print("R2 sequence file - {0}".format(results.r.name))
                 print("input metadata file - {0}".format(results.m.name))
-                start_run = Demultiplex()
+                start_run = Demultiplex(results)
                 start_run.run_demultiplex_and_trim(results)
                 
     except IOError as e:
