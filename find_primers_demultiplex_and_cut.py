@@ -121,7 +121,7 @@ class Demultiplex(object):
                                         primer in line[primer_ix].split(',')])
             # reverse primer were reverse complemented
             raw_reverse_primers.update([upper(str(DNA(primer))) for
-                                        primer in line[rev_primer_ix].split(',')])
+                                            primer in line[rev_primer_ix].split(',')])
     
         if not raw_forward_primers:
             self.logger.critical("No forward primers detected in mapping file.")
@@ -152,14 +152,14 @@ class Demultiplex(object):
         import logging
         self.logger = logging.getLogger('_fqwrte_')
         
-        if len(fastq_list) < 2:
+        if len(filename) < 12:
             try:    
                 r1_handle = filename + "_R1.fq"
-                with open(r1_handle, 'a') as self.out_seqs:
+                with open(r1_handle, 'a', 3290000) as self.out_seqs:
                     SeqIO.write(fastq_list[0], self.out_seqs, "fastq")
                     
                 r2_handle = filename + "_R2.fq"
-                with open(r2_handle, 'a') as self.out_seqs:
+                with open(r2_handle, 'a', 3290000) as self.out_seqs:
                     SeqIO.write(fastq_list[1], self.out_seqs, "fastq")
                     
             except TypeError as e:
@@ -233,7 +233,7 @@ class Demultiplex(object):
         metafile = opts.m
         output_directory = opts.o
         filename=""
-        check_both_orientations = opts.reverse_complement
+        #check_both_orientations = opts.reverse_complement
         
         # extract .gz to temp file location
         if 'gzipFilename' in kwargs:
@@ -278,7 +278,7 @@ class Demultiplex(object):
             
             bar.update(self.total_seqs)        
             
-            self.logger.debug("processing seq ID - R1 {0}... R2 {1}".format(r1.id, r2.id))
+            self.logger.debug("\nprocessing seq ID - R1 {0}... R2 {1}".format(r1.id, r2.id))
             self.logger.debug("R1 sequence - {0}".format(r1.seq))
             self.logger.debug("R2 sequence - {0}".format(r2.seq))
 
@@ -337,10 +337,9 @@ class Demultiplex(object):
             
             # can change this to a try catch
             if len(self.f_primer_found) > 1 and len(self.r_primer_found) > 1:
-                self.logger.debug('F primer-{0}...R primer-{1}...Check RC-{2}'.\
+                self.logger.debug('F primer-{0}...R primer-{1}'.\
                                 format(self.f_primer_found[1].get('pattern_found'),
-                                       self.r_primer_found[1].get('pattern_found'),
-                                        check_both_orientations))
+                                       self.r_primer_found[1].get('pattern_found')))
 #            
 #            if (check_both_orientations == 'True') and not (f_primer_found == True) and not (r_primer_found == True):                    
 #                #raw_input()
@@ -382,7 +381,7 @@ class Demultiplex(object):
         #if /len(curr_seq) < 1:
         #    self.no_seq_left += 1
         #    continue
-            self.logger.debug("self.f_primer_found {0} self.r_primer_found {1}".format(self.f_primer_found, self.r_primer_found))
+            self.logger.debug("self.f_primer_found {0}\nself.r_primer_found {1}".format(self.f_primer_found, self.r_primer_found))
             if (self.f_primer_found[1].get('pattern_found') == True) and\
                 (self.r_primer_found[1].get('pattern_found') == True):
         
@@ -402,21 +401,23 @@ class Demultiplex(object):
                 self.sample_id = self.get_sample_id_from_primer_sequence(sample_primer_dict, self.f_primer_found[1].get('pattern'), self.r_primer_found[1].get('pattern'))
                 #filename = self.generate_filename(self.f_primer_found, self.r_primer_found, r1, r2, )
             
-                self.logger.debug("assigning read {0} to base filename {1}".format(r1.id, self.sample_id))
-                
-                if "None" == self.sample_id:
-                    self.unmapped_count += 1
-                    self.logger.debug("Failed to get filename from primer sheet.\
-                                  {0}\n{1}\n{2}\n{3}\n{4}\n".format(r1.id, r2.id,
+                self.logger.debug("assigning read {0} to sample id - {1}".format(r1.id, self.sample_id))
+
+                if self.sample_id == None:
+                    self.unmapped_count += 2
+                    
+                    self.logger.debug("Failed to get filename from primer sheet"+
+                                  "{0}\n{1}\n{2}\n{3}\n".format(r1.id, r2.id, 
                                   self.f_primer_found[1].get('pattern'),
                                   self.r_primer_found[1].get('pattern')))
-                    incorrect_primer_pairs_filename = os.path.join(output_directory,\
-                                                                   self.sample_id +
-                                                                   "_incorrect_primer_pairing.fq")
+                    incorrect_primer_pairs_filename = os.path.join(output_directory,
+                                                                   "incorrect_primer_pairing.fq")
+                    
                     with open(incorrect_primer_pairs_filename, 'a') as f:
-                        f.write("new filename...{0}".format(filename))
+                        SeqIO.write([r1,r2], f, "fastq")
+                        
                 else:
-                    self.both_primers_count += 1
+                    self.both_primers_count += 2
                     
                     # record is returned as a list
                     record = self.return_fastq_seqio_object([r1, r2], filename)
@@ -558,20 +559,22 @@ class Demultiplex(object):
         
         rectified_r_primer = self.replace_ambiguous_pattern_with_iupac_base(r_primer_pattern)
         self.logger.debug("primer converted to F - {0} and R - {1}".format(rectified_f_primer, rectified_r_primer))
-        # reverse complement after replacing the bases, otherwise the brackets are changed as well
-        rectified_r_primer = self.reverse_complement_reverse_primer(rectified_r_primer)
-        self.logger.debug("Reverse primer reverse complemented - R - {0}".format(rectified_r_primer))
-        #values_set = set()
-        count=0
         
-        for key, values in sample_id_primer_dict.items():
-            count+=1
-            if count > len(sample_id_primer_dict):
+        #
+        # reverse complement after replacing the bases, otherwise the brackets are changed as well
+        #rectified_r_primer = self.reverse_complement_reverse_primer(rectified_r_primer)
+        #self.logger.debug("Reverse primer reverse complemented - R - {0}".format(rectified_r_primer))
+        #values_set = set()
+        len_dict = len(sample_id_primer_dict)
+        
+        for idx, (key, values) in enumerate(sample_id_primer_dict.items()):
+            if idx > len_dict:
                 return "No_match"
             elif str(rectified_f_primer) in str(values[0]) and str(rectified_r_primer) in str(values[1]):
                 return key
             else:
                 continue
+        #return "No_match"
 
     
     def return_fastq_seqio_object(self, data, filename):
@@ -687,8 +690,8 @@ if __name__ == '__main__':
     parser.add_argument('--m', metavar='--> metadata file, QIIME formatted', required=True, type=argparse.FileType('r'))
     parser.add_argument('--f', metavar='--> sequence file - fastq or gzipped', required=True, type=argparse.FileType('r'))
     parser.add_argument('--r', metavar='--> reverse sequence file', required=True, type=argparse.FileType('r'))
-    parser.add_argument('--l', metavar='--> length of primer to use in search', required=False, action='store', help='Length or piece of primer in 5bp from 5prime end for search')
-    parser.add_argument('--reverse_complement', metavar='--> check reverse complement', required=True, action='store', help='Whether to check in both orientations or not')
+    parser.add_argument('--l', metavar='--> length of primer to use in search', required=False, action='store', help='Length of primer in bp from 5 prime end for search')
+    parser.add_argument('--t', metavar='--> trim barcode-primer from sequence', required=True, action='store', help='Whether to trim the sequencing used for demultiplexing or not')
     parser.add_argument('--o', metavar='--> output directory', required=True ,action='store')
     try:
         results = parser.parse_args()
