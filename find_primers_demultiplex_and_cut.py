@@ -6,7 +6,7 @@ import logging.config
 import yaml
 
 from string import upper
-from re import search
+from re import match
 from re import compile
 import argparse
 import gzip
@@ -63,6 +63,7 @@ class Demultiplex(object):
                 pass
         self.logger.debug("{0} has {1} lines".format(filename, str(i+1)))
         return i + 1
+        
         
     def index_sequences(self, filenames):
         
@@ -133,15 +134,27 @@ class Demultiplex(object):
 
      
         forward_primers = []
+        forward_primers_rc = []
         reverse_primers = []
+        reverse_primers_rc = []
+
         for curr_primer in raw_forward_primers:
-            forward_primers.append(compile(''.join([self.iupac[symbol] for
-                                                    symbol in curr_primer[:self.search_length]])))
+    
+            forward_primers.append(compile(''.join([self.iupac[symbol] for symbol in curr_primer[:self.search_length]])))
+            forward_primers_rc.append(compile(''.join([self.iupac[symbol] for symbol in self.reverse_complement(curr_primer[:self.search_length])])))
+        
         for curr_primer in raw_reverse_primers:
-            reverse_primers.append(compile(''.join([self.iupac[symbol] for
-                                                    symbol in curr_primer[:self.search_length]])))
-         
-        return forward_primers, reverse_primers
+            reverse_primers.append(compile(''.join([self.iupac[symbol] for symbol in curr_primer[:self.search_length]])))
+            reverse_primers_rc.append(compile(''.join([self.iupac[symbol] for symbol in self.reverse_complement(curr_primer[:self.search_length])])))
+            
+        return forward_primers, forward_primers_rc, reverse_primers, reverse_primers_rc
+            
+    def reverse_complement(self, sequence):
+    # Sequences are reverse complemented when F and R reads were merged. So same has to happen to primers.
+    
+        rc_sequence = Seq(sequence, IUPAC.ambiguous_dna)
+    
+        return rc_sequence.reverse_complement()
     
     def write_fastq_sequence(self, fastq_list, filename):
         
@@ -178,37 +191,45 @@ class Demultiplex(object):
 #        
 #            return None
         
-    
-    def regex_search_through_sequence(self, search_string, regex_search_list):
+
+    def regex_search_through_sequence(self, search_dict, regex_dict):
         
-        ''' Takes in a regex pattern list, and using the list items searches 
-        through a tuple of strings until it either finds a match or not. 
+        ''' Takes in a regex pattern dictionary-list, and using the list values
+        items searches through a tuple of strings until it either finds a match or not.
         
         Returns True/False (default False), the start and end position on the string and the
-        regex pattern found and the tuple index indicating + or - orientation.'''
+        regex pattern found and the tuple index indicating + or - orientation, and the 
+        orientation of the search pattern used '''
         
         import logging
         self.logger = logging.getLogger('_regex__')
-
         
-        # must check the positions of the primer, may need to adjuset by 1 + or -
-        #self.logger.debug("string to regex through...[0-20] {0}".format(search_string[0:20]))
-        if len(search_string) == 0: raise Exception ("Zero length sequence")
-        for sub_string in search_string:
-            for curr_pattern in regex_search_list:
-                match = search(curr_pattern, search_string)
-                if match:
-                    self.logger.debug("found pattern...{0}".format(curr_pattern.pattern))
-                    
-                    return {'pattern_found' : True, 
-                            'pattern' : curr_pattern.pattern,
-                            'start_position' : match.span()[0],
-                            'end_position' : match.span()[1],
-                            'index' : search_string.index(sub_string)}
-                else:
-                    continue
-                
-        return {'pattern_found' : False}
+        pair_result = []
+        for strand_key, sequence in search_dict.iteritems():
+            for orient_key, pattern_list in regex_dict.items():
+                for search_pattern in pattern_list:                
+                    search_match = match(search_pattern, str(sequence.seq))
+                    if search_match:
+                        pair_result.append({'pattern_found' : True, 
+                                            'pattern' : search_pattern.pattern,
+                                            'start_position' : search_match.span()[0],
+                                            'end_position' : search_match.span()[1],
+                                            'index' : strand_key,
+                                            'orient_key' : orient_key})
+                        break
+                    else:
+                        continue
+                    break
+        else:
+            try:
+                if (pair_result == None) or (len(max(pair_result, key=len)) < 6):
+                    pair_result.append({'pattern_found' : False,
+                                        'index' : strand_key})    
+            except ValueError:
+                pair_result.append({'pattern_found' : False,
+                                        'index' : strand_key})
+
+        return pair_result
             
     def run_demultiplex_and_trim(self, opts, **kwargs):
         
@@ -253,10 +274,13 @@ class Demultiplex(object):
         self.logger.debug("csv mapping data from {0}...\n{1}".format(metafile, "\n".join([str(x) for x in mapping_data])))
         
         # get the primer search patterns
-        forward_primer_patterns, reverse_primer_patterns = self.get_primers(header, mapping_data)
+        #forward_primer_patterns, reverse_primer_patterns = self.get_primers(header, mapping_data)
+        forward_primers, forward_primers_rc, reverse_primers, reverse_primers_rc = self.get_primers(header, mapping_data)
+        self.primer_pattern_dict_list = {'fp' : forward_primers, 'fprc' : forward_primers_rc, 'rp' : reverse_primers, 'rprc' : reverse_primers_rc}
         
-        self.logger.debug("forward_primer patterns\n{0}\n".format("\n".join([str(x.pattern) for x in forward_primer_patterns])))
-        self.logger.debug("reverse_primers patterns\n{0}\n".format("\n".join([str(x.pattern) for x in reverse_primer_patterns])))
+        
+        self.logger.debug("forward_primer patterns\n{0}\n".format("\n".join([str(x.pattern) for x in self.primer_pattern_dict_list.get('fp')])))
+        self.logger.debug("reverse_primers patterns\n{0}\n".format("\n".join([str(x.pattern) for x in self.primer_pattern_dict_list.get('rp')])))
         
         # replace colons with underscores in the sample_id names
         for samples in mapping_data:
@@ -287,59 +311,65 @@ class Demultiplex(object):
             self.total_seqs += 2
             
             # tuple with both orientations
-            self.curr_r1 = (r1.seq, r1.seq.reverse_complement())
-            self.curr_r2 = (r2.seq, r2.seq.reverse_complement())
-
+            #self.curr_r1 = (r1.seq, r1.seq.reverse_complement())
+            #self.curr_r2 = (r2.seq, r2.seq.reverse_complement())
+            self.pair_read = {'r1' : r1, 'r2' :r2}
             #start_slice = 0
             #end_slice = -1
             self.f_primer_found = []
             self.r_primer_found = []
             
-            self.logger.debug("Looking in R1 for patterns...")
-            r1_forward_primer_search = self.regex_search_through_sequence(str(self.curr_r1), 
-                                                                       forward_primer_patterns)
-            r1_reverse_primer_search = self.regex_search_through_sequence(str(self.curr_r1), 
-                                                                       reverse_primer_patterns)
-            self.logger.debug("r1_forward_primer_search {0}...r1_reverse_primer_search {1}".format(r1_forward_primer_search, r1_reverse_primer_search))
-            self.logger.debug("Looking in R2 for patterns...")
-            r2_forward_primer_search = self.regex_search_through_sequence(str(self.curr_r2), 
-                                                                       forward_primer_patterns)
-            r2_reverse_primer_search = self.regex_search_through_sequence(str(self.curr_r2),
-                                                                       reverse_primer_patterns)
-            self.logger.debug("r2_forward_primer_search {0}... r2_reverse_primer_search {1}".format(r2_forward_primer_search, r2_reverse_primer_search))
+            self.logger.debug("Looking in pair read for patterns...")
+            primer_pair_search = self.regex_search_through_sequence(self.pair_read,  
+                                                                       self.primer_pattern_dict_list)
+            #r2_primer_search = self.regex_search_through_sequence(str(self.curr_r1), 
+            #                                                           self.primer_pattern_dict_list)
+            #self.logger.debug("r1_forward_primer_search {0}...r1_reverse_primer_search {1}".format(r1_primer_search, r2_primer_search))
             
-            self.logger.debug("regex result lengths -> {0}-{1}-{2}-{3}".format(len(r1_forward_primer_search),len(r1_reverse_primer_search),len(r2_forward_primer_search),len(r2_reverse_primer_search)))
-            #if len(r1_forward_primer_search) == 0: raise Exception ("Where is the regex result for self_f_primer_found ?")
+#            self.logger.debug("Looking in R2 for patterns...")
+#            r2_forward_primer_search = self.regex_search_through_sequence(str(self.curr_r2), 
+#                                                                       forward_primer_patterns)
+#            r2_reverse_primer_search = self.regex_search_through_sequence(str(self.curr_r2),
+#                                                                       reverse_primer_patterns)
+#            self.logger.debug("r2_forward_primer_search {0}... r2_reverse_primer_search {1}".format(r2_forward_primer_search, r2_reverse_primer_search))
+#            
+#            self.logger.debug("regex result lengths -> {0}-{1}-{2}-{3}".format(len(r1_forward_primer_search),len(r1_reverse_primer_search),len(r2_forward_primer_search),len(r2_reverse_primer_search)))
+#            #if len(r1_forward_primer_search) == 0: raise Exception ("Where is the regex result for self_f_primer_found ?")
             #if len(r1_reverse_primer_search) == 0: raise Exception ("Where is the regex result for self_r_primer_found ?")
+ 
             
-            self.logger.debug(r1_forward_primer_search)
-            if r1_forward_primer_search.get('pattern_found') == True:
-                self.logger.debug("found at tuple position {0}".format(r1_forward_primer_search.get('index')))
-                self.f_primer_found.append('r1f')
-                self.f_primer_found.append(r1_forward_primer_search)
-            elif r2_forward_primer_search.get('pattern_found') == True:
-                self.logger.debug("found at tuple position {0}".format(r2_forward_primer_search.get('index')))
-                self.f_primer_found.append('r2f')
-                self.f_primer_found.append(r2_forward_primer_search)
+            if primer_pair_search[0].get('pattern_found') == True:
+                self.logger.debug("F primer found between {0}-{1}".format(primer_pair_search[0].get('start'),primer_pair_search[0].get('end') ))
+                self.f_primer_found = primer_pair_search[0].get('pattern_found')
+            #    self.f_primer_found.append('r1f')
+            #    self.f_primer_found.append(r1_forward_primer_search)
+            
+            elif primer_pair_search[1].get('pattern_found') == True:
+                self.logger.debug("R primer found between {0}-{1}".format(primer_pair_search[1].get('start'),primer_pair_search[1].get('end')))
+                self.r_primer_found = primer_pair_search[1].get('pattern_found')
+                #self.f_primer_found.append('r2f')
+                #self.f_primer_found.append(r2_forward_primer_search)
             else:
-                self.f_primer_found = ['', {'pattern_found' : False}]
+                self.logger.debug("No search contig found for this sequence")
                 
-            if r1_reverse_primer_search.get('pattern_found') == True:
-                self.logger.debug("found at tuple position {0}".format(r1_reverse_primer_search.get('index')))
-                self.r_primer_found.append('r1r')
-                self.r_primer_found.append(r1_reverse_primer_search)
-            elif r2_reverse_primer_search.get('pattern_found') == True:
-                self.logger.debug("found at tuple position {0}".format(r2_reverse_primer_search.get('index')))
-                self.r_primer_found.append('r2r')
-                self.r_primer_found.append(r2_reverse_primer_search)
-            else:
-                self.r_primer_found = ['', {'pattern_found' : False}]
-            
-            # can change this to a try catch
-            if len(self.f_primer_found) > 1 and len(self.r_primer_found) > 1:
-                self.logger.debug('F primer-{0}...R primer-{1}'.\
-                                format(self.f_primer_found[1].get('pattern_found'),
-                                       self.r_primer_found[1].get('pattern_found')))
+                #self.f_primer_found = ['', {'pattern_found' : False}]
+                
+#            if r1_reverse_primer_search.get('pattern_found') == True:
+#                self.logger.debug("found at tuple position {0}".format(r1_reverse_primer_search.get('index')))
+#                self.r_primer_found.append('r1r')
+#                self.r_primer_found.append(r1_reverse_primer_search)
+#            elif r2_reverse_primer_search.get('pattern_found') == True:
+#                self.logger.debug("found at tuple position {0}".format(r2_reverse_primer_search.get('index')))
+#                self.r_primer_found.append('r2r')
+#                self.r_primer_found.append(r2_reverse_primer_search)
+#            else:
+#                self.r_primer_found = ['', {'pattern_found' : False}]
+#            
+#            # can change this to a try catch
+#            if len(self.f_primer_found) > 1 and len(self.r_primer_found) > 1:
+#                self.logger.debug('F primer-{0}...R primer-{1}'.\
+#                                format(self.f_primer_found[1].get('pattern_found'),
+#                                       self.r_primer_found[1].get('pattern_found')))
 #            
 #            if (check_both_orientations == 'True') and not (f_primer_found == True) and not (r_primer_found == True):                    
 #                #raw_input()
@@ -381,11 +411,10 @@ class Demultiplex(object):
         #if /len(curr_seq) < 1:
         #    self.no_seq_left += 1
         #    continue
-            self.logger.debug("self.f_primer_found {0}\nself.r_primer_found {1}".format(self.f_primer_found, self.r_primer_found))
-            if (self.f_primer_found[1].get('pattern_found') == True) and\
-                (self.r_primer_found[1].get('pattern_found') == True):
+            #self.logger.debug("self.f_primer_found {0}\nself.r_primer_found {1}".format(self.f_primer_found, self.r_primer_found))
+            if (self.f_primer_found == True) and (self.r_primer_found == True):
         
-                self.logger.debug("Both F and R primers found - \n R1 sequence {0}\n R2 sequences {1} \n forward pattern - {2} \n start_position - {3} \n end_position {4}\n reverse pattern - {3} \n reverse pattern - {4}\n".format(r1.seq, r2.seq, self.f_primer_found[1].get('pattern_found'), str(self.f_primer_found[1].get('start_position')),str(self.r_primer_found[1].get('end_position')),self.r_primer_found[1].get('pattern')))
+                #self.logger.debug("Both F and R primers found - \n R1 sequence {0}\n R2 sequences {1} \n forward pattern - {2} \n start_position - {3} \n end_position {4}\n reverse pattern - {3} \n reverse pattern - {4}\n".format(r1.seq, r2.seq, self.f_primer_found[1].get('pattern_found'), str(self.f_primer_found[1].get('start_position')),str(self.r_primer_found[1].get('end_position')),self.r_primer_found[1].get('pattern')))
             #else: self.logger.debug("No primer match found, continuing...{0}".format(e))            
             
             # get filename from reversing the regex pattern
@@ -393,12 +422,12 @@ class Demultiplex(object):
 
             
             #if len(self.f_primer_found) > 0 and len(self.r_primer_found) > 0:
-                self.logger.debug("self.f_primer_found {0}... self.r_primer_found {1}".format(self.f_primer_found, 
-                                                                                               self.r_primer_found))
-                self.logger.debug("self.f_primer_found length = {0}, self.r_primer_found length {1}".format(str(len(self.f_primer_found)), 
-                                                                                                            str(len(self.r_primer_found))))
+                #self.logger.debug("self.f_primer_found {0}... self.r_primer_found {1}".format(self.f_primer_found, 
+                #                                                                               self.r_primer_found))
+                #self.logger.debug("self.f_primer_found length = {0}, self.r_primer_found length {1}".format(str(len(self.f_primer_found)), 
+                 #                                                                                           str(len(self.r_primer_found))))
                 
-                self.sample_id = self.get_sample_id_from_primer_sequence(sample_primer_dict, self.f_primer_found[1].get('pattern'), self.r_primer_found[1].get('pattern'))
+                self.sample_id = self.get_sample_id_from_primer_sequence(sample_primer_dict, self.primer_pair_search[0].get('pattern'), self.primer_pair_search[1].get('pattern'))
                 #filename = self.generate_filename(self.f_primer_found, self.r_primer_found, r1, r2, )
             
                 self.logger.debug("assigning read {0} to sample id - {1}".format(r1.id, self.sample_id))
@@ -474,7 +503,6 @@ class Demultiplex(object):
         except IOError as e:
             self.logger.critical("The metadata file does not exist or the path is wrong - error {0}".format(e)) 
 
-    
     def invert_regex_pattern(self, sample_primer_dict):
         
         
@@ -490,8 +518,8 @@ class Demultiplex(object):
             # only keep the ambiguous combinations
             if len(values) > 1:
                 inverted_dict.update({values: keys})
-        return inverted_dict    
-    
+        return inverted_dict
+        
     def replace_ambiguous_pattern_with_iupac_base(self, sequence):
         
         '''    
@@ -547,7 +575,9 @@ class Demultiplex(object):
             the filename into which successfully mapped sequences will be placed.
             
             Once reversed from the regex pattern, the F and R sequences are checked
-            against the list of primers provided by the metadata file.
+            against the list of primers provided by the metadata file. Using set
+            means that only one sample_id is returned if both match as sets can
+            only contain unique items, otherwise there are two items in the set.
         '''
         import logging
         self.logger = logging.getLogger('smplf4id')
@@ -560,23 +590,22 @@ class Demultiplex(object):
         rectified_r_primer = self.replace_ambiguous_pattern_with_iupac_base(r_primer_pattern)
         self.logger.debug("primer converted to F - {0} and R - {1}".format(rectified_f_primer, rectified_r_primer))
         
-        #
-        # reverse complement after replacing the bases, otherwise the brackets are changed as well
-        #rectified_r_primer = self.reverse_complement_reverse_primer(rectified_r_primer)
-        #self.logger.debug("Reverse primer reverse complemented - R - {0}".format(rectified_r_primer))
-        #values_set = set()
-        len_dict = len(sample_id_primer_dict)
+        values_set = set()
         
-        for idx, (key, values) in enumerate(sample_id_primer_dict.items()):
-            if idx > len_dict:
-                return "No_match"
-            elif str(rectified_f_primer) in str(values[0]) and str(rectified_r_primer) in str(values[1]):
-                return key
-            else:
+        for key, values in sample_id_primer_dict.items():
+            
+            if any(f_primer_pattern in f for f in values):
+                values_set.add(key)
+            elif any(r_primer_pattern in r for r in values):
+                values_set.add(key)
+                
+            if len(values_set) == 2:
+                return values_set
+            else: 
                 continue
-        #return "No_match"
+                
+        return values_set
 
-    
     def return_fastq_seqio_object(self, data, filename):
     
         '''Construct Biopython SeqIO object for each of the fastq reads
