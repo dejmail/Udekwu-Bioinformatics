@@ -42,6 +42,8 @@ class Demultiplex(object):
         self.quality_errors = 0
         self.unmapped_count = 0
         self.total_seqs = 0
+        
+        self.record_buffer = {}
         self.iupac = {'A': 'A', 'T': 'T', 'G': 'G', 'C': 'C', \
                       'R': '[AG]', 'Y': '[CT]','S': '[GC]',\
                       'W': '[AT]', 'K': '[GT]', 'M': '[AC]',\
@@ -190,7 +192,21 @@ class Demultiplex(object):
 #            qual = record.letter_annotations["phred_quality"]
 #        
 #            return None
+
+    def determine_sequence_slices(self, sample_id, sample_primer_dict, search_result):
         
+        try:
+            r1_start_slice = search_result[0].get('start_position')
+            r1_end_slice = len(sample_primer_dict.get(sample_id[0])[0])
+    
+            r2_start_slice = search_result[1].get('start_position')
+            r2_end_slice = len(sample_primer_dict.get(sample_id[0])[1])
+            
+            return {'r1' : [r1_start_slice, r1_end_slice]}, {'r2' : [r2_start_slice, r2_end_slice]}
+        
+        except KeyError as e:
+            print(e)
+            return "Error with slice determination"        
 
     def regex_search_through_sequence(self, search_dict, regex_dict):
         
@@ -230,6 +246,82 @@ class Demultiplex(object):
                                         'index' : strand_key})
 
         return pair_result
+
+    def clip_primers_from_seq(self, search_result, primer_dict, seq_dict, sample_primer_dict, sample_id):
+    
+        # search_result - list of dictionaries
+        # primer_dict - dict of lists
+        # seq_dict - dictionary of seqio objects
+        
+        # loop through each sequence, whilst looping through each pattern_search
+        # result. Match the keys and use the search result to clip the sequence
+        # return a 
+        
+        # | search_result
+        # 'pattern_found' : True, 
+        # 'pattern' : search_pattern.pattern,
+        # 'start_position' : search_match.span()[0],
+        # 'end_position' : search_match.span()[1],
+        # 'index' : strand_key,
+        # 'orient_key' : orient_key})
+        
+        # | seq_dict
+        # {'r1' : r1 sequence info, 'r2' : r2 sequence info}
+        
+        #(search_result, primer_dict, seq_dict, sample_primer_dict, sample_id)
+        
+        new_record = {}
+        
+        r1_slices, r2_slices = self.determine_sequence_slices(sample_id, sample_primer_dict, search_result)
+        
+        record_r1 = search_result[0]
+        record_r2 = search_result[1]
+            
+        for seq_key, record in seq_dict.iteritems():
+            
+            if seq_key in record_r1.values():
+                
+                tmp_record = SeqRecord.SeqRecord(id=record.id,
+                            seq=record.seq[r1_slices.get('r1')[0]:r1_slices.get('r1')[1]],
+                            description=sample_id[0],
+                            letter_annotations={'phred_quality' : record.letter_annotations['phred_quality'][r1_slices.get('r1')[0]:r1_slices.get('r1')[1]]})
+                
+                new_record.setdefault('r1', {}).append(tmp_record)
+                del(tmp_record)
+                
+            elif seq_key in record_r2.values():
+                
+                tmp_record = SeqRecord.SeqRecord(id=record.id,
+                            seq=record.seq[r2_slices.get('r2')[0]:r2_slices.get('r2')[1]],
+                            description=sample_id[0],
+                            letter_annotations={'phred_quality' : record.letter_annotations['phred_quality'][r2_slices.get('r2')[0]:r2_slices.get('r2')[1]]})
+        
+                new_record.setdefault('r2', {}).append(tmp_record)
+                del(tmp_record)
+                    
+        return new_record
+    
+    def record_buffer_and_writer(self, record_dict):
+        values = []
+        
+        for key, value in record_dict.items():
+            self.record_buffer.setdefault(key, {}).append(value)
+        
+        
+        for entry in self.record_buffer.values(): values.append(len(entry))
+        
+        print(sum(values))
+        if (sum(values) >= 25) or (100 - sum(values) <= 25):
+            print(sum(values))
+            #read_key = r1, r2, discarded
+            for pair_key, record in self.record_buffer.items():
+                print(pair_key)
+                #filename = record.description + "_" + read_key + ".fq"            
+                #print(filename
+            values=[]
+            return "Buffer cleared"
+        
+        return "Buffer < 25"
             
     def run_demultiplex_and_trim(self, opts, **kwargs):
         
@@ -299,7 +391,8 @@ class Demultiplex(object):
             #self.seq = record.seq
             #self.seq_rc = record.seq.reverse_complement()
             #self.qual = record.letter_annotations["phred_quality"]
-            
+            seq_dict = {'r1' : r1, 'r2' : r2}
+
             bar.update(self.total_seqs)        
             
             self.logger.debug("\nprocessing seq ID - R1 {0}... R2 {1}".format(r1.id, r2.id))
@@ -320,8 +413,29 @@ class Demultiplex(object):
             self.r_primer_found = []
             
             self.logger.debug("Looking in pair read for patterns...")
-            primer_pair_search = self.regex_search_through_sequence(self.pair_read,  
-                                                                       self.primer_pattern_dict_list)
+            
+            search_result = self.regex_search_through_sequence(seq_dict, self.primer_pattern_dict_list)
+            #print(search_result)
+            try:
+                sample_id = self.get_sample_id_from_primer_sequence(sample_primer_dict, search_result[0].get('pattern'), search_result[1].get('pattern'))
+            except IndexError as e:
+                # sample is missing one or both the patterns keys
+                print("Sample seq is missing a a pattern, {0} - {1}".format(sample_id, e))
+                output = self.record_buffer_and_writer({'discarded' : seq_dict})
+                del(output)
+                continue
+            try:
+                new_seq = self.clip_primers_from_seq(search_result, self.primer_pattern_dict_list, seq_dict, sample_primer_dict, sample_id)
+            except Exception as e:    
+                print("attempt to get new sequence failed - e - {0}".format(e))
+                output = self.record_buffer_and_writer({'discarded' : seq_dict})
+                del(output)
+                continue
+        
+            output = self.record_buffer_and_writer(new_seq)
+            
+            #primer_pair_search = self.regex_search_through_sequence(self.pair_read,  
+            #                                                          self.primer_pattern_dict_list)
             #r2_primer_search = self.regex_search_through_sequence(str(self.curr_r1), 
             #                                                           self.primer_pattern_dict_list)
             #self.logger.debug("r1_forward_primer_search {0}...r1_reverse_primer_search {1}".format(r1_primer_search, r2_primer_search))
@@ -337,21 +451,21 @@ class Demultiplex(object):
 #            #if len(r1_forward_primer_search) == 0: raise Exception ("Where is the regex result for self_f_primer_found ?")
             #if len(r1_reverse_primer_search) == 0: raise Exception ("Where is the regex result for self_r_primer_found ?")
  
-            
-            if primer_pair_search[0].get('pattern_found') == True:
-                self.logger.debug("F primer found between {0}-{1}".format(primer_pair_search[0].get('start'),primer_pair_search[0].get('end') ))
-                self.f_primer_found = primer_pair_search[0].get('pattern_found')
-            #    self.f_primer_found.append('r1f')
-            #    self.f_primer_found.append(r1_forward_primer_search)
-            
-            elif primer_pair_search[1].get('pattern_found') == True:
-                self.logger.debug("R primer found between {0}-{1}".format(primer_pair_search[1].get('start'),primer_pair_search[1].get('end')))
-                self.r_primer_found = primer_pair_search[1].get('pattern_found')
-                #self.f_primer_found.append('r2f')
-                #self.f_primer_found.append(r2_forward_primer_search)
-            else:
-                self.logger.debug("No search contig found for this sequence")
-                
+#            
+#            if primer_pair_search[0].get('pattern_found') == True:
+#                self.logger.debug("F primer found between {0}-{1}".format(primer_pair_search[0].get('start'),primer_pair_search[0].get('end') ))
+#                self.f_primer_found = primer_pair_search[0].get('pattern_found')
+#            #    self.f_primer_found.append('r1f')
+#            #    self.f_primer_found.append(r1_forward_primer_search)
+#            
+#            elif primer_pair_search[1].get('pattern_found') == True:
+#                self.logger.debug("R primer found between {0}-{1}".format(primer_pair_search[1].get('start'),primer_pair_search[1].get('end')))
+#                self.r_primer_found = primer_pair_search[1].get('pattern_found')
+#                #self.f_primer_found.append('r2f')
+#                #self.f_primer_found.append(r2_forward_primer_search)
+#            else:
+#                self.logger.debug("No search contig found for this sequence")
+#                
                 #self.f_primer_found = ['', {'pattern_found' : False}]
                 
 #            if r1_reverse_primer_search.get('pattern_found') == True:
@@ -412,67 +526,67 @@ class Demultiplex(object):
         #    self.no_seq_left += 1
         #    continue
             #self.logger.debug("self.f_primer_found {0}\nself.r_primer_found {1}".format(self.f_primer_found, self.r_primer_found))
-            if (self.f_primer_found == True) and (self.r_primer_found == True):
-        
-                #self.logger.debug("Both F and R primers found - \n R1 sequence {0}\n R2 sequences {1} \n forward pattern - {2} \n start_position - {3} \n end_position {4}\n reverse pattern - {3} \n reverse pattern - {4}\n".format(r1.seq, r2.seq, self.f_primer_found[1].get('pattern_found'), str(self.f_primer_found[1].get('start_position')),str(self.r_primer_found[1].get('end_position')),self.r_primer_found[1].get('pattern')))
-            #else: self.logger.debug("No primer match found, continuing...{0}".format(e))            
-            
-            # get filename from reversing the regex pattern
-            #self.logger.debug("sample_primer_dict - {0}".format(sample_primer_dict))
-
-            
-            #if len(self.f_primer_found) > 0 and len(self.r_primer_found) > 0:
-                #self.logger.debug("self.f_primer_found {0}... self.r_primer_found {1}".format(self.f_primer_found, 
-                #                                                                               self.r_primer_found))
-                #self.logger.debug("self.f_primer_found length = {0}, self.r_primer_found length {1}".format(str(len(self.f_primer_found)), 
-                 #                                                                                           str(len(self.r_primer_found))))
-                
-                self.sample_id = self.get_sample_id_from_primer_sequence(sample_primer_dict, self.primer_pair_search[0].get('pattern'), self.primer_pair_search[1].get('pattern'))
-                #filename = self.generate_filename(self.f_primer_found, self.r_primer_found, r1, r2, )
-            
-                self.logger.debug("assigning read {0} to sample id - {1}".format(r1.id, self.sample_id))
-
-                if self.sample_id == None:
-                    self.unmapped_count += 2
-                    
-                    self.logger.debug("Failed to get filename from primer sheet"+
-                                  "{0}\n{1}\n{2}\n{3}\n".format(r1.id, r2.id, 
-                                  self.f_primer_found[1].get('pattern'),
-                                  self.r_primer_found[1].get('pattern')))
-                    incorrect_primer_pairs_filename = os.path.join(output_directory,
-                                                                   "incorrect_primer_pairing.fq")
-                    
-                    with open(incorrect_primer_pairs_filename, 'a') as f:
-                        SeqIO.write([r1,r2], f, "fastq")
-                        
-                else:
-                    self.both_primers_count += 2
-                    
-                    # record is returned as a list
-                    record = self.return_fastq_seqio_object([r1, r2], filename)
-                    self.logger.debug("sample_id is...{0}".format(self.sample_id))
-                    self.write_fastq_sequence(record, os.path.join(output_directory, self.sample_id))  
-            
-            if (self.f_primer_found[1].get('pattern_found') == True) and\
-                (self.r_primer_found[1].get('pattern_found') == False):
-                self.logger.debug("Only forward primer found")
-                self.f_only_count += 1
-                fastq_entry = self.return_fastq_seqio_object([r1, r2], "Only_F")
-                self.write_fastq_sequence(fastq_entry, os.path.join(output_directory, "Only_F.fq"))
-                
-            if (self.f_primer_found[1].get('pattern_found') == False) and\
-                (self.r_primer_found[1].get('pattern_found') == True):
-                self.logger.debug("Only reverse primer found")
-                self.r_only_count += 1
-                fastq_entry = self.return_fastq_seqio_object([r1, r2],"Only_R")
-                self.write_fastq_sequence(fastq_entry, os.path.join(output_directory, "Only_R.fq"))
-            
-            if (self.f_primer_found[1].get('pattern_found') == False) and\
-                (self.f_primer_found[1].get('pattern_found') == False):
-                self.logger.debug("Neither F nor R primer found")
-                self.unmapped_count += 1
-                fastq_entry = self.return_fastq_seqio_object([r1, r2], "None")
-                self.write_fastq_sequence(fastq_entry, os.path.join(output_directory, "None.fq"))                
+#            if (self.f_primer_found == True) and (self.r_primer_found == True):
+#        
+#                #self.logger.debug("Both F and R primers found - \n R1 sequence {0}\n R2 sequences {1} \n forward pattern - {2} \n start_position - {3} \n end_position {4}\n reverse pattern - {3} \n reverse pattern - {4}\n".format(r1.seq, r2.seq, self.f_primer_found[1].get('pattern_found'), str(self.f_primer_found[1].get('start_position')),str(self.r_primer_found[1].get('end_position')),self.r_primer_found[1].get('pattern')))
+#            #else: self.logger.debug("No primer match found, continuing...{0}".format(e))            
+#            
+#            # get filename from reversing the regex pattern
+#            #self.logger.debug("sample_primer_dict - {0}".format(sample_primer_dict))
+#
+#            
+#            #if len(self.f_primer_found) > 0 and len(self.r_primer_found) > 0:
+#                #self.logger.debug("self.f_primer_found {0}... self.r_primer_found {1}".format(self.f_primer_found, 
+#                #                                                                               self.r_primer_found))
+#                #self.logger.debug("self.f_primer_found length = {0}, self.r_primer_found length {1}".format(str(len(self.f_primer_found)), 
+#                 #                                                                                           str(len(self.r_primer_found))))
+#                
+#                self.sample_id = self.get_sample_id_from_primer_sequence(sample_primer_dict, self.primer_pair_search[0].get('pattern'), self.primer_pair_search[1].get('pattern'))
+#                #filename = self.generate_filename(self.f_primer_found, self.r_primer_found, r1, r2, )
+#            
+#                self.logger.debug("assigning read {0} to sample id - {1}".format(r1.id, self.sample_id))
+#
+#                if self.sample_id == None:
+#                    self.unmapped_count += 2
+#                    
+#                    self.logger.debug("Failed to get filename from primer sheet"+
+#                                  "{0}\n{1}\n{2}\n{3}\n".format(r1.id, r2.id, 
+#                                  self.f_primer_found[1].get('pattern'),
+#                                  self.r_primer_found[1].get('pattern')))
+#                    incorrect_primer_pairs_filename = os.path.join(output_directory,
+#                                                                   "incorrect_primer_pairing.fq")
+#                    
+#                    with open(incorrect_primer_pairs_filename, 'a') as f:
+#                        SeqIO.write([r1,r2], f, "fastq")
+#                        
+#                else:
+#                    self.both_primers_count += 2
+#                    
+#                    # record is returned as a list
+#                    record = self.return_fastq_seqio_object([r1, r2], filename)
+#                    self.logger.debug("sample_id is...{0}".format(self.sample_id))
+#                    self.write_fastq_sequence(record, os.path.join(output_directory, self.sample_id))  
+#            
+#            if (self.f_primer_found[1].get('pattern_found') == True) and\
+#                (self.r_primer_found[1].get('pattern_found') == False):
+#                self.logger.debug("Only forward primer found")
+#                self.f_only_count += 1
+#                fastq_entry = self.return_fastq_seqio_object([r1, r2], "Only_F")
+#                self.write_fastq_sequence(fastq_entry, os.path.join(output_directory, "Only_F.fq"))
+#                
+#            if (self.f_primer_found[1].get('pattern_found') == False) and\
+#                (self.r_primer_found[1].get('pattern_found') == True):
+#                self.logger.debug("Only reverse primer found")
+#                self.r_only_count += 1
+#                fastq_entry = self.return_fastq_seqio_object([r1, r2],"Only_R")
+#                self.write_fastq_sequence(fastq_entry, os.path.join(output_directory, "Only_R.fq"))
+#            
+#            if (self.f_primer_found[1].get('pattern_found') == False) and\
+#                (self.f_primer_found[1].get('pattern_found') == False):
+#                self.logger.debug("Neither F nor R primer found")
+#                self.unmapped_count += 1
+#                fastq_entry = self.return_fastq_seqio_object([r1, r2], "None")
+#                self.write_fastq_sequence(fastq_entry, os.path.join(output_directory, "None.fq"))                
                 
                     
         self.logger.info("__________________________")
@@ -604,7 +718,8 @@ class Demultiplex(object):
             else: 
                 continue
                 
-        return values_set
+        return list(values_set)
+        
 
     def return_fastq_seqio_object(self, data, filename):
     
