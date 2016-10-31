@@ -41,7 +41,7 @@ class Demultiplex(object):
         self.no_seq_left = 0
         self.quality_errors = 0
         self.unmapped_count = 0
-        self.total_seqs = 0
+        self.processed_seqs = 0
         
         self.record_buffer = {}
         self.iupac = {'A': 'A', 'T': 'T', 'G': 'G', 'C': 'C', \
@@ -52,9 +52,12 @@ class Demultiplex(object):
         self.search_length = int(opts.l)
         self.r1_filename = opts.f
         self.r2_filename = opts.r
+        self.output_dir = opts.o
         self.inverted_iupac = self.invert_regex_pattern(self.iupac)
-        self.R1, self.r1_tot, self.R2, self.r2_tot = self.index_sequences([self.r1_filename, self.r2_filename])
-            
+        self.R1, self.r1_tot, self.R2, self.r2_tot = self.index_sequence_files([self.r1_filename, self.r2_filename])
+        self.starting_total = (self.r1_tot + self.r2_tot)/4
+        self.buffer_limit = 5000
+                
     def number_of_lines_in_file(self, filename):
         
         import logging
@@ -66,8 +69,8 @@ class Demultiplex(object):
         self.logger.debug("{0} has {1} lines".format(filename, str(i+1)))
         return i + 1
         
-        
-    def index_sequences(self, filenames):
+
+    def index_sequence_files(self, filenames):
         
         import logging
         self.logger = logging.getLogger('_idxseq_')
@@ -75,12 +78,12 @@ class Demultiplex(object):
         if ("R1" in filenames[0].name) and ("R2" in filenames[1].name):
             
             self.r1_number_of_lines = self.number_of_lines_in_file(filenames[0].name)
-            self.logger.debug("thus {0} reads".format(self.r1_number_of_lines/4))
+            #self.logger.debug("thus {0} reads".format(self.r1_number_of_lines/4))
             self.r1_sequences = SeqIO.index(filenames[0].name, 'fastq', generic_dna)
             #self.logger.debug(self.r1_sequences)
             
             self.r2_number_of_lines = self.number_of_lines_in_file(filenames[1].name)
-            self.logger.debug("thus {0} reads".format(self.r2_number_of_lines/4))
+            #self.logger.debug("thus {0} reads".format(self.r2_number_of_lines/4))
             self.r2_sequences = SeqIO.index(filenames[1].name, 'fastq', generic_dna)
             #self.logger.debug(self.r2_sequences)
             
@@ -91,7 +94,7 @@ class Demultiplex(object):
             return None    
                 
                 
-    def get_primers(self, header, mapping_data):
+    def create_primer_regex_patterns(self, header, mapping_data):
         
         """ Returns lists of forward/reverse primer regular expression
     
@@ -195,17 +198,25 @@ class Demultiplex(object):
 
     def determine_sequence_slices(self, sample_id, sample_primer_dict, search_result):
         
+        import logging
+        self.logger = logging.getLogger('_slicer_')
+        
+        r1_seq_length = search_result[0].get('length')
+        r2_seq_length = search_result[0].get('length')
+        
         try:
             r1_start_slice = search_result[0].get('start_position')
             r1_end_slice = len(sample_primer_dict.get(sample_id[0])[0])
-    
+            self.logger.debug("R1 start slice {0} end slice {1}".format(r1_start_slice, r1_end_slice))
+            
             r2_start_slice = search_result[1].get('start_position')
             r2_end_slice = len(sample_primer_dict.get(sample_id[0])[1])
+            self.logger.debug("R2 start slice {0} sequence end slice {1}".format(r2_start_slice, r2_end_slice))
             
-            return {'r1' : [r1_start_slice, r1_end_slice]}, {'r2' : [r2_start_slice, r2_end_slice]}
+            return {'r1' : [r1_end_slice, r1_seq_length]}, {'r2' : [r2_end_slice, r2_seq_length]}                   
         
         except KeyError as e:
-            print(e)
+            self.logger.error("Error with slice determination...{0}...{1}".format(search_result, e))
             return "Error with slice determination"        
 
     def regex_search_through_sequence(self, search_dict, regex_dict):
@@ -230,6 +241,7 @@ class Demultiplex(object):
                                             'pattern' : search_pattern.pattern,
                                             'start_position' : search_match.span()[0],
                                             'end_position' : search_match.span()[1],
+                                            'length' : len(sequence.seq),
                                             'index' : strand_key,
                                             'orient_key' : orient_key})
                         break
@@ -247,11 +259,14 @@ class Demultiplex(object):
 
         return pair_result
 
-    def clip_primers_from_seq(self, search_result, primer_dict, seq_dict, sample_primer_dict, sample_id):
-    
+    def clip_primers_from_seq(self, search_result, primer_dict, pair_seq_dict, sample_primer_dict, sample_id):
+        
+        import logging
+        self.logger = logging.getLogger('demultip')
+        
         # search_result - list of dictionaries
         # primer_dict - dict of lists
-        # seq_dict - dictionary of seqio objects
+        # pair_seq_dict - dictionary of seqio objects
         
         # loop through each sequence, whilst looping through each pattern_search
         # result. Match the keys and use the search result to clip the sequence
@@ -265,10 +280,10 @@ class Demultiplex(object):
         # 'index' : strand_key,
         # 'orient_key' : orient_key})
         
-        # | seq_dict
+        # | pair_seq_dict
         # {'r1' : r1 sequence info, 'r2' : r2 sequence info}
         
-        #(search_result, primer_dict, seq_dict, sample_primer_dict, sample_id)
+        #(search_result, primer_dict, pair_seq_dict, sample_primer_dict, sample_id)
         
         new_record = {}
         
@@ -277,51 +292,76 @@ class Demultiplex(object):
         record_r1 = search_result[0]
         record_r2 = search_result[1]
             
-        for seq_key, record in seq_dict.iteritems():
+    
+        for seq_key, record in pair_seq_dict.iteritems():
+            self.logger.debug("inside clip loop")
             
             if seq_key in record_r1.values():
-                
-                tmp_record = SeqRecord.SeqRecord(id=record.id,
+                self.logger.debug("attempt clipping r1 values")                
+                r1_tmp_record = SeqRecord.SeqRecord(id=record.id,
                             seq=record.seq[r1_slices.get('r1')[0]:r1_slices.get('r1')[1]],
                             description=sample_id[0],
                             letter_annotations={'phred_quality' : record.letter_annotations['phred_quality'][r1_slices.get('r1')[0]:r1_slices.get('r1')[1]]})
+                new_record.setdefault(sample_id[0]+'_r1', []).append(r1_tmp_record)
+                #self.logger.debug("new r1_tmp_record {0}".format(r1_tmp_record))
                 
-                new_record.setdefault('r1', {}).append(tmp_record)
-                del(tmp_record)
-                
+                #del(tmp_record)
+                self.logger.debug("just before r2 clip")    
             elif seq_key in record_r2.values():
-                
-                tmp_record = SeqRecord.SeqRecord(id=record.id,
+                self.logger.debug("attempt clipping r2 values")
+                r2_tmp_record = SeqRecord.SeqRecord(id=record.id,
                             seq=record.seq[r2_slices.get('r2')[0]:r2_slices.get('r2')[1]],
                             description=sample_id[0],
                             letter_annotations={'phred_quality' : record.letter_annotations['phred_quality'][r2_slices.get('r2')[0]:r2_slices.get('r2')[1]]})
+                new_record.setdefault(sample_id[0]+'_r2', []).append(r2_tmp_record)
+                #self.logger.debug("new r2_tmp_record {0}".format(r2_tmp_record))
+                #del(tmp_record)
+                
+        self.logger.debug("finished clipping")                    
+        self.logger.debug("new_record dict {0}".format(new_record))
         
-                new_record.setdefault('r2', {}).append(tmp_record)
-                del(tmp_record)
-                    
         return new_record
     
     def record_buffer_and_writer(self, record_dict):
-        values = []
+        
+        import logging
+        self.logger = logging.getLogger('_buffer_')
+        
+        buffer_count = []
         
         for key, value in record_dict.items():
-            self.record_buffer.setdefault(key, {}).append(value)
+            self.record_buffer.setdefault(key, []).append(value)
         
+        for entry in self.record_buffer.values(): buffer_count.append(len(entry))
         
-        for entry in self.record_buffer.values(): values.append(len(entry))
-        
-        print(sum(values))
-        if (sum(values) >= 25) or (100 - sum(values) <= 25):
-            print(sum(values))
+        # need to figure out some way to have it write in blocks - maybe divide the
+        # initial line count into chunks and use that as some sort of tally
+        if (sum(buffer_count) == self.buffer_limit) or (self.starting_total == self.processed_seqs):
+            self.logger.info("Record buffer full, writing {0} records to disk".format(sum(buffer_count)))
             #read_key = r1, r2, discarded
             for pair_key, record in self.record_buffer.items():
-                print(pair_key)
-                #filename = record.description + "_" + read_key + ".fq"            
-                #print(filename
-            values=[]
-            return "Buffer cleared"
+                #self.logger.debug("keys {0}".format(self.record_buffer.keys()))
+                #self.logger.debug("adding record to base filename {0}".format(pair_key))
+                if not pair_key == 'discarded':
+                    self.logger.debug("record from sample group {0}".format(pair_key))
+                    for sample_entries in record:
+                        self.logger.debug("sample_entries - {0}".format(sample_entries))
+                        for individual_records in sample_entries:
+                            self.logger.debug("sample_entries {0}, individual_records  {1}".format(sample_entries, individual_records))
+                            filename = os.path.join(self.output_dir, pair_key + ".fq")
+                            
+                            with open(filename, "a") as output:
+                                SeqIO.write(handle=output, sequences=sample_entries, format='fastq')
+                if pair_key == 'discarded':
+                    for sample_entries in record:
+                        for individual_records in sample_entries:
+                            self.logger.debug("indv records - {0}".format(individual_records))
+                        
+                        
+            #reset after the records written to disk                
+            buffer_count=[]
         
-        return "Buffer < 25"
+        return "Buffer written"
             
     def run_demultiplex_and_trim(self, opts, **kwargs):
         
@@ -344,8 +384,6 @@ class Demultiplex(object):
         
 
         metafile = opts.m
-        output_directory = opts.o
-        filename=""
         #check_both_orientations = opts.reverse_complement
         
         # extract .gz to temp file location
@@ -366,8 +404,8 @@ class Demultiplex(object):
         self.logger.debug("csv mapping data from {0}...\n{1}".format(metafile, "\n".join([str(x) for x in mapping_data])))
         
         # get the primer search patterns
-        #forward_primer_patterns, reverse_primer_patterns = self.get_primers(header, mapping_data)
-        forward_primers, forward_primers_rc, reverse_primers, reverse_primers_rc = self.get_primers(header, mapping_data)
+        #forward_primer_patterns, reverse_primer_patterns = self.create_primer_regex_patterns(header, mapping_data)
+        forward_primers, forward_primers_rc, reverse_primers, reverse_primers_rc = self.create_primer_regex_patterns(header, mapping_data)
         self.primer_pattern_dict_list = {'fp' : forward_primers, 'fprc' : forward_primers_rc, 'rp' : reverse_primers, 'rprc' : reverse_primers_rc}
         
         
@@ -391,9 +429,9 @@ class Demultiplex(object):
             #self.seq = record.seq
             #self.seq_rc = record.seq.reverse_complement()
             #self.qual = record.letter_annotations["phred_quality"]
-            seq_dict = {'r1' : r1, 'r2' : r2}
+            pair_seq_dict = {'r1' : r1, 'r2' : r2}
 
-            bar.update(self.total_seqs)        
+            bar.update(self.processed_seqs)        
             
             self.logger.debug("\nprocessing seq ID - R1 {0}... R2 {1}".format(r1.id, r2.id))
             self.logger.debug("R1 sequence - {0}".format(r1.seq))
@@ -401,7 +439,7 @@ class Demultiplex(object):
 
             self.sample_id = ""
             # because we process two sequences at a time (R1 and R2)
-            self.total_seqs += 2
+            self.processed_seqs += 2
             
             # tuple with both orientations
             #self.curr_r1 = (r1.seq, r1.seq.reverse_complement())
@@ -414,24 +452,31 @@ class Demultiplex(object):
             
             self.logger.debug("Looking in pair read for patterns...")
             
-            search_result = self.regex_search_through_sequence(seq_dict, self.primer_pattern_dict_list)
+            search_result = self.regex_search_through_sequence(pair_seq_dict, self.primer_pattern_dict_list)
+            
+            self.logger.debug("search result - {0}".format(search_result))
             #print(search_result)
             try:
                 sample_id = self.get_sample_id_from_primer_sequence(sample_primer_dict, search_result[0].get('pattern'), search_result[1].get('pattern'))
+                self.logger.debug("**R1 ID** {0} & **R2 ID** {1} from sample {2}".format(r1.id, r2.id, sample_id))
             except IndexError as e:
                 # sample is missing one or both the patterns keys
-                print("Sample seq is missing a a pattern, {0} - {1}".format(sample_id, e))
-                output = self.record_buffer_and_writer({'discarded' : seq_dict})
+                self.logger.debug("Sample seq is missing a pattern, {0} - {1} - discarding read".format(sample_id, e))
+                output = self.record_buffer_and_writer({'discarded' : pair_seq_dict})
                 del(output)
                 continue
             try:
-                new_seq = self.clip_primers_from_seq(search_result, self.primer_pattern_dict_list, seq_dict, sample_primer_dict, sample_id)
-            except Exception as e:    
-                print("attempt to get new sequence failed - e - {0}".format(e))
-                output = self.record_buffer_and_writer({'discarded' : seq_dict})
+                new_seq = self.clip_primers_from_seq(search_result, self.primer_pattern_dict_list, pair_seq_dict, sample_primer_dict, sample_id)
+            except Exception as e:
+                self.logger.debug("attempt to clip sequence failed - errmsg - {0} - discarding read".format(e))
+                output = self.record_buffer_and_writer({'discarded' : pair_seq_dict})
                 del(output)
                 continue
         
+            output = self.record_buffer_and_writer(new_seq)
+            if output == "Buffered cleared":
+                self.record_buffer = {}
+        if r1[-1]:
             output = self.record_buffer_and_writer(new_seq)
             
             #primer_pair_search = self.regex_search_through_sequence(self.pair_read,  
@@ -596,7 +641,7 @@ class Demultiplex(object):
         self.logger.info("No seq left after truncation: {0}".format(self.no_seq_left))
         self.logger.info("Sequences with errors in quality scores: {0}".format(self.quality_errors))
         self.logger.info("Sequences not mapped: {0}".format(self.unmapped_count))
-        self.logger.info("Total sequences checked: {0}".format(self.total_seqs))
+        self.logger.info("Total sequences checked: {0}".format(self.processed_seqs))
     
         self.logger.info("Run finished")
      
@@ -649,7 +694,7 @@ class Demultiplex(object):
         import logging
         self.logger = logging.getLogger('chgambig')
         
-        self.logger.debug("reversing pattern {0}".format(sequence))
+        self.logger.debug("reversing pattern to normal seq {0}".format(sequence))
         
         #self.logger.info("reversed {0} pattern".format(inverted_iupac))
         #self.sequence = SeqIO.read(StringIO(sequence), "fasta")
