@@ -5,7 +5,7 @@ import logging
 import logging.config
 import yaml
 
-from string import upper
+from string import upper, maketrans
 from re import match
 from re import compile
 import argparse
@@ -159,6 +159,10 @@ class Demultiplex(object):
     
 
     def determine_sequence_slices(self, sample_id, sample_primer_dict, search_result):
+        
+        '''Determine the coordinates where each sequence needs to be clipped 
+           from and to in order to remove the primer-barcode sequences
+        '''
         
         import logging
         self.logger = logging.getLogger('_slicer_')
@@ -337,6 +341,7 @@ class Demultiplex(object):
         #extract the relevant data from the metadata file, can maybe change this to non-qiime1
         self.logger.info("Getting header and mapping data...")
         header, mapping_data, run_description, errors, warnings = process_id_map(metafile)
+        self.logger.debug("metadata headers {0}".format(header))
         self.logger.debug("csv mapping data from {0}...\n{1}".format(metafile, "\n".join([str(x) for x in mapping_data])))
         
         # get the primer regex search patterns
@@ -351,11 +356,18 @@ class Demultiplex(object):
         # the positions needs to be automatically allocated        
         # replace colons with underscores in the sample_id names
         for samples in mapping_data:
-            sample_primer_dict[samples[0].replace(":","_")] = (samples[2], samples[5])
+            
+            intab = '.-+|=:;,'
+            outtab = '________'
+            trantab = maketrans(intab, outtab)
+
+            sample_primer_dict[samples[header.index('SampleID')].translate(trantab)] = (samples[header.index('LinkerPrimerSequence')], samples[header.index('ReversePrimer')])
+            
+            intab = samples
             file_list.append(samples[0].replace(":","_"))
             
         self.logger.debug("sample_primer_dict...{0}".format("\n".join(x) for x in sample_primer_dict.items()))
-        
+        self.logger.info("Starting demultiplex process...")
         bar = progressbar.ProgressBar(max_value=(self.r1_tot+self.r2_tot)/4,redirect_stdout=True)
     
         for r1, r2 in zip(self.R1.values(), self.R2.values()):
