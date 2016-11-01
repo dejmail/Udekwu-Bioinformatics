@@ -318,13 +318,10 @@ class Demultiplex(object):
         self.logger = logging.getLogger('demultip')
         
         sample_primer_dict = {}
-        file_list = []
-
         
         if not opts:
             sys.exit("command line options not getting to main method")
         
-
         metafile = opts.m
         
         # extract .gz to temp file location
@@ -352,20 +349,19 @@ class Demultiplex(object):
         
         self.logger.debug("forward_primer patterns\n{0}\n".format("\n".join([str(x.pattern) for x in self.primer_pattern_dict_list.get('fp')])))
         self.logger.debug("reverse_primers patterns\n{0}\n".format("\n".join([str(x.pattern) for x in self.primer_pattern_dict_list.get('rp')])))
-
-        # the positions needs to be automatically allocated        
-        # replace colons with underscores in the sample_id names
+        
+        # replace all extra characters in header with underscore
+        intab = '.-+|=:;,&$'
+        outtab = '__________'
+        trantab = maketrans(intab, outtab)
+        
         for samples in mapping_data:
             
-            intab = '.-+|=:;,'
-            outtab = '________'
-            trantab = maketrans(intab, outtab)
-
-            sample_primer_dict[samples[header.index('SampleID')].translate(trantab)] = (samples[header.index('LinkerPrimerSequence')], samples[header.index('ReversePrimer')])
-            
-            intab = samples
-            file_list.append(samples[0].replace(":","_"))
-            
+            try:
+                sample_primer_dict[samples[header.index('SampleID')].translate(trantab)] = (samples[header.index('LinkerPrimerSequence')], samples[header.index('ReversePrimer')])
+            except Exception as e:
+                self.logger.error("Can not find {0} in header fields, please make sure metadata file has the required fields".format(e))
+                        
         self.logger.debug("sample_primer_dict...{0}".format("\n".join(x) for x in sample_primer_dict.items()))
         self.logger.info("Starting demultiplex process...")
         bar = progressbar.ProgressBar(max_value=(self.r1_tot+self.r2_tot)/4,redirect_stdout=True)
