@@ -6,7 +6,7 @@ import logging.config
 import yaml
 
 from string import upper, maketrans
-from re import match
+from re import match, search
 from re import compile
 import argparse
 import gzip
@@ -32,7 +32,6 @@ class Demultiplex(object):
         self.setup_logging()
         self.logger = logger or logging.getLogger(__name__)
 
-        
         self.f_count = 0
         self.r_count = 0
         self.f_only_count = 0
@@ -76,7 +75,7 @@ class Demultiplex(object):
         self.logger = logging.getLogger('_idxseq_')
         
         self.logger.info("Indexing sequences....")
-        if ("R1" in filenames[0].name) and ("R2" in filenames[1].name):
+        if ("R1" in filenames[0].name.upper()) and ("R2" in filenames[1].name.upper()):
             
             self.r1_number_of_lines = self.number_of_lines_in_file(filenames[0].name)
             self.r1_sequences = SeqIO.index(filenames[0].name, 'fastq', generic_dna)
@@ -156,12 +155,18 @@ class Demultiplex(object):
         rc_sequence = Seq(sequence, IUPAC.ambiguous_dna)
     
         return rc_sequence.reverse_complement()
-    
-
+        
     def determine_sequence_slices(self, sample_id, sample_primer_dict, search_result):
         
         '''Determine the coordinates where each sequence needs to be clipped 
-           from and to in order to remove the primer-barcode sequences
+           in order to remove the primer-barcode sequences
+           
+           sample_id is a tuple, so sampl_id[0] makes sure just the value is 
+           returned.
+           
+           command like sample_primer_dict.get(sample_id[0])[0]) will for
+           example get the first primer sequence from sample 1_2.        
+           
         '''
         
         import logging
@@ -170,21 +175,61 @@ class Demultiplex(object):
         r1_seq_length = search_result[0].get('length')
         r2_seq_length = search_result[0].get('length')
         
+        self.logger.debug("sample_id - {0}".format(sample_id))
+        
         try:
-            r1_start_slice = search_result[0].get('start_position')
-            r1_end_slice = len(sample_primer_dict.get(sample_id[0])[0])
-            self.logger.debug("R1 start slice {0} end slice {1}".format(r1_start_slice, r1_end_slice))
+            if len(search_result) == 4:
+                
+                self.logger.debug("pattern search contains {0} reads per primer pair".format(len(search_result)))
+                r1_sublist = [num for num in search_result if num.get('index') == 'r1']
+                for matches in r1_sublist:
+                    if matches.get('start_position') < 40:
+                        r1_start_slice = matches.get('start_position') + len(sample_primer_dict.get(sample_id[0])[0])
+                
+                    if matches.get('start_position') > r1_seq_length - 40:
+                        r1_end_slice = r1_seq_length - len(sample_primer_dict.get(sample_id[0])[1])
+                        
+                        self.logger.debug("length of forward primer {0}".format(len(sample_primer_dict.get(sample_id[0])[0])))
+                                    
+                r2_sublist = [num for num in search_result if num.get('index') == 'r2']
+                for matches in r2_sublist:
+                
+                    if matches.get('start_position') < 40:
+                        r2_start_slice = matches.get('start_position') + len(sample_primer_dict.get(sample_id[0])[1])
             
-            r2_start_slice = search_result[1].get('start_position')
-            r2_end_slice = len(sample_primer_dict.get(sample_id[0])[1])
-            self.logger.debug("R2 start slice {0} sequence end slice {1}".format(r2_start_slice, r2_end_slice))
+                    if matches.get('start_position') > r1_seq_length-40:
+                        r2_end_slice = r1_seq_length - len(sample_primer_dict.get(sample_id[0])[1])
+                        self.logger.debug("length of reverse primer {0}".format(len(sample_primer_dict.get(sample_id[0])[1])))
+    
+                self.logger.debug("r1_start_slice - {0}, r1_end_slice {1}".format(r1_start_slice, r1_end_slice))
+                self.logger.debug("r2_start_slice - {0}, r2_end_slice {1}".format(r2_start_slice, r2_end_slice))                
+                self.logger.debug("sample_id[0][0] - {0}".format(sample_primer_dict.get(sample_id[0])[0]))
+                self.logger.debug("sample_id[0][1] - {0}".format(sample_primer_dict.get(sample_id[0])[1]))
+                
+                return {'r1' : [r1_start_slice, r1_end_slice]}, {'r2' : [r2_start_slice, r2_end_slice]}
+            elif len(search_result) == 3:
+                self.logger.debug("pattern search contains {0} positive patterns - {1}".format(len(search_result), search_result))
+                return None
+                
+            elif len(search_result) == 2:
+                self.logger.debug("reads have one primer match each")
+                r1_start_slice = search_result[0].get('start_position')
+                r1_end_slice = len(sample_primer_dict.get(sample_id[0])[0])
+                self.logger.debug("R1 start slice {0} - end slice {1}".format(r1_start_slice, r1_end_slice))
+                
+                r2_start_slice = search_result[1].get('start_position')
+                r2_end_slice = len(sample_primer_dict.get(sample_id[0])[1])
+                self.logger.debug("R2 start slice {0} - end slice {1}".format(r2_start_slice, r2_end_slice))
             
-            return {'r1' : [r1_end_slice, r1_seq_length]}, {'r2' : [r2_end_slice, r2_seq_length]}                   
+                self.logger.debug("sample_id[0][0] - {0}".format(sample_primer_dict.get(sample_id[0])[0]))
+                self.logger.debug("sample_id[0][1] - {0}".format(sample_primer_dict.get(sample_id[0])[1]))
+                
+            return {'r1' : [r1_end_slice, r1_seq_length]}, {'r2' : [r2_end_slice, r2_seq_length]}
         
         except KeyError as e:
             self.logger.error("Error with slice determination...{0}...{1}".format(search_result, e))
-            return "Error with slice determination"        
-
+            return "Error with slice determination"
+    
     def regex_search_through_sequence(self, search_dict, regex_dict):
         
         ''' Takes in a regex pattern dictionary-list, and using the list values
@@ -192,28 +237,38 @@ class Demultiplex(object):
         
         Returns True/False (default False), the start and end position on the string and the
         regex pattern found and the tuple index indicating + or - orientation, and the 
-        orientation of the search pattern used '''
+        orientation of the search pattern used 
+        
+        Extra hits are removed if they are outside of the search range i.e.
+        starting more than 40 bp from the start, or 40bp from the end. Anything
+        else is discarded.
+        
+        '''
         
         import logging
         self.logger = logging.getLogger('_regex__')
         
         pair_result = []
         for strand_key, sequence in search_dict.iteritems():
+            self.logger.debug("strand key {0}".format(strand_key))
             for orient_key, pattern_list in regex_dict.items():
                 for search_pattern in pattern_list:                
-                    search_match = match(search_pattern, str(sequence.seq))
+                    search_match = search(search_pattern, str(sequence.seq))
                     if search_match:
-                        pair_result.append({'pattern_found' : True, 
-                                            'pattern' : search_pattern.pattern,
-                                            'start_position' : search_match.span()[0],
-                                            'end_position' : search_match.span()[1],
-                                            'length' : len(sequence.seq),
-                                            'index' : strand_key,
-                                            'orient_key' : orient_key})
-                        break
-                    else:
-                        continue
-                    break
+                        # remove matches within the internal part of read
+                        if (search_match.span()[0] < 40) or (search_match.span()[0] > len(sequence.seq) - 40):
+                        
+                            pair_result.append({'pattern_found' : True, 
+                                                'pattern' : search_pattern.pattern,
+                                                'start_position' : search_match.span()[0],
+                                                'end_position' : search_match.span()[1],
+                                                'length' : len(sequence.seq),
+                                                'index' : strand_key,
+                                                'orient_key' : orient_key})
+                            #break
+                    #else:
+                    #    continue
+                    #break
         else:
             try:
                 if (pair_result == None) or (len(max(pair_result, key=len)) < 6):
@@ -232,16 +287,22 @@ class Demultiplex(object):
         
         new_record = {}
         
+        if len(sample_id) == 2:
+            raise  ValueError ("Two sample IDs = mispriming")
+        else:
+            pass  
+
         r1_slices, r2_slices = self.determine_sequence_slices(sample_id, sample_primer_dict, search_result)
         
         record_r1 = search_result[0]
         record_r2 = search_result[1]
-            
+
+        #self.logger.debug("sample_id length - {0}".format(len(sample_id)))          
     
         for seq_key, record in pair_seq_dict.iteritems():
             
             if seq_key in record_r1.values():
-                self.logger.debug("attempt clipping r1 values")
+                self.logger.debug("attempt clip of r1 values")
                 r1_tmp_record = SeqRecord.SeqRecord(id=record.id,
                             seq=record.seq[r1_slices.get('r1')[0]:r1_slices.get('r1')[1]],
                             description=sample_id[0],
@@ -250,7 +311,7 @@ class Demultiplex(object):
                 new_record.setdefault(sample_id[0]+'_r1', []).append(r1_tmp_record)
 
             elif seq_key in record_r2.values():
-                self.logger.debug("attempt clipping r2 values")
+                self.logger.debug("attempt clip of r2 values")
                 r2_tmp_record = SeqRecord.SeqRecord(id=record.id,
                             seq=record.seq[r2_slices.get('r2')[0]:r2_slices.get('r2')[1]],
                             description=sample_id[0],
@@ -283,8 +344,6 @@ class Demultiplex(object):
             for pair_key, record in self.record_buffer.items():
                 
                 if not pair_key == 'discarded':
-                    #self.logger.debug("record from sample group {0}".format(pair_key))
-                    #self.logger.debug("writing {0} entries to file".format(len(record)))
                     
                     for sample_entries in record:                        
                         for individual_records in sample_entries:
@@ -305,6 +364,7 @@ class Demultiplex(object):
         
             return "cleared"
             
+    
     def run_demultiplex_and_trim(self, opts, **kwargs):
         
         """
@@ -356,7 +416,6 @@ class Demultiplex(object):
         trantab = maketrans(intab, outtab)
         
         for samples in mapping_data:
-            
             try:
                 sample_primer_dict[samples[header.index('SampleID')].translate(trantab)] = (samples[header.index('LinkerPrimerSequence')], samples[header.index('ReversePrimer')])
             except Exception as e:
@@ -388,6 +447,7 @@ class Demultiplex(object):
             self.logger.debug("Looking in pair read for patterns...")
             
             search_result = self.regex_search_through_sequence(pair_seq_dict, self.primer_pattern_dict_list)
+            
             
             self.logger.debug("search result - {0}".format(search_result))
             
@@ -476,7 +536,7 @@ class Demultiplex(object):
         import logging
         self.logger = logging.getLogger('chgambig')
         
-        self.logger.debug("reversing pattern to normal seq {0}".format(sequence))
+        #self.logger.debug("reversing pattern to normal seq {0}".format(sequence))
         
         for key,value in self.inverted_iupac.items():
             if key in sequence:
@@ -509,7 +569,8 @@ class Demultiplex(object):
             Once reversed from the regex pattern, the F and R sequences are checked
             against the list of primers provided by the metadata file. Using set
             means that only one sample_id is returned if both match as sets can
-            only contain unique items, otherwise there are two items in the set.
+            only contain unique items, otherwise there are two items in the set,
+            meaning a probably mispriming in which case the sequence is discarded.
         '''
         import logging
         self.logger = logging.getLogger('smplf4id')
