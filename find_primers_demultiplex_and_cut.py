@@ -425,10 +425,12 @@ class Demultiplex(object):
         self.logger.info("Starting demultiplex process...")
         bar = progressbar.ProgressBar(max_value=(self.r1_tot+self.r2_tot)/4,redirect_stdout=True)
     
-        for r1, r2 in zip(self.R1.values(), self.R2.values()):
-            
+        for r1, r2 in zip(self.R1.itervalues(), self.R2.itervalues()):
+            self.logger.debug("r1 {0}".format(r1))
+            self.logger.debug("r2 {0}".format(r1))
 
             pair_seq_dict = {'r1' : r1, 'r2' : r2}
+            self.logger.debug("pair_seq_dict {0}".format(pair_seq_dict))
             
             self.logger.debug("\nprocessing seq ID - R1 {0}... R2 {1}".format(r1.id, r2.id))
             self.logger.debug("R1 sequence - {0}".format(r1.seq))
@@ -438,7 +440,7 @@ class Demultiplex(object):
             # because we process two sequences at a time (R1 and R2)
             self.processed_seqs += 2
 
-            self.pair_read = {'r1' : r1, 'r2' :r2}
+            #self.pair_read = {'r1' : r1, 'r2' :r2}
             #start_slice = 0
             #end_slice = -1
             self.f_primer_found = []
