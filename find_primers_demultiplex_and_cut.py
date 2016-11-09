@@ -11,6 +11,7 @@ from re import compile
 import argparse
 import gzip
 import random, string
+import itertools
 
 from skbio.sequence import DNA
  
@@ -425,7 +426,7 @@ class Demultiplex(object):
         self.logger.info("Starting demultiplex process...")
         bar = progressbar.ProgressBar(max_value=(self.r1_tot+self.r2_tot)/4,redirect_stdout=True)
     
-        for r1, r2 in zip(self.R1.itervalues(), self.R2.itervalues()):
+        for r1, r2 in itertools.izip(self.R1.itervalues(), self.R2.itervalues()):
             self.logger.debug("r1 {0}".format(r1))
             self.logger.debug("r2 {0}".format(r1))
 
