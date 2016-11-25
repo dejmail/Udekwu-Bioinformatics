@@ -311,7 +311,7 @@ class Demultiplex(object):
                 self.logger.debug("r1 unclipped length {0}, clipped length {1}".format(len(record.seq), len(r1_tmp_record.seq)))
                 new_record.setdefault(sample_id[0]+'_r1', []).append(r1_tmp_record)
 
-            elif seq_key in record_r2.values():
+            if seq_key in record_r2.values():
                 self.logger.debug("attempt clip of r2 values")
                 r2_tmp_record = SeqRecord.SeqRecord(id=record.id,
                             seq=record.seq[r2_slices.get('r2')[0]:r2_slices.get('r2')[1]],
