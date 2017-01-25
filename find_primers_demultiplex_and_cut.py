@@ -128,11 +128,11 @@ class Demultiplex(object):
     
         if not raw_forward_primers:
             self.logger.critical("No forward primers detected in mapping file.")
-            raise ValueError(("No forward primers detected in mapping file."))
+            raise ValueError("No forward primers detected in mapping file.")
             
         if not raw_reverse_primers:
             self.logger.critical("No reverse primers detected in mapping file.")
-            raise ValueError(("No reverse primers detected in mapping file."))
+            raise ValueError("No reverse primers detected in mapping file.")
 
      
         forward_primers = []
@@ -295,32 +295,58 @@ class Demultiplex(object):
 
         r1_slices, r2_slices = self.determine_sequence_slices(sample_id, sample_primer_dict, search_result)
         
-        record_r1 = search_result[0]
-        record_r2 = search_result[1]
+        record_r1_regx_result = search_result[0]
+        record_r2_regx_result = search_result[1]
 
-        #self.logger.debug("sample_id length - {0}".format(len(sample_id)))          
-    
+        r1_orientation = record_r1_regx_result.get('orient_key')
+        r2_orientation = record_r2_regx_result.get('orient_key')
+        
+        
+        self.logger.debug("r1 orientation {0}, r2 orientation {1}".format(r1_orientation,
+                                                                          r2_orientation))
+        
         for seq_key, record in pair_seq_dict.iteritems():
             
-            if seq_key in record_r1.values():
+            if seq_key in record_r1_regx_result.values():       
+                
                 self.logger.debug("attempt clip of r1 values")
+                r1_seq = record.seq[r1_slices.get('r1')[0]:r1_slices.get('r1')[1]]
+                self.logger.debug("r1 seq clipped...{0}".format(r1_seq[0:25]))
+                
+                if r1_orientation != 'fp':
+                    self.logger.debug("r1 read not in forward orientation...reverse complementing")
+                    r1_seq=self.reverse_complement(r1_seq)
+                    self.logger.debug("r1 rc sequence starting as...{0}".format(r1_seq[0:25]))
+
                 r1_tmp_record = SeqRecord.SeqRecord(id=record.id,
-                            seq=record.seq[r1_slices.get('r1')[0]:r1_slices.get('r1')[1]],
+                            seq=str(r1_seq),
                             description=sample_id[0],
                             letter_annotations={'phred_quality' : record.letter_annotations['phred_quality'][r1_slices.get('r1')[0]:r1_slices.get('r1')[1]]})
                 self.logger.debug("r1 unclipped length {0}, clipped length {1}".format(len(record.seq), len(r1_tmp_record.seq)))
+                
                 new_record.setdefault(sample_id[0]+'_r1', []).append(r1_tmp_record)
+                self.logger.debug("clipped r1_tmp_record seq...{0}".format(r1_tmp_record.seq[0:25]))
+                
+            if seq_key in record_r2_regx_result.values():
+                
+                self.logger.debug("attempt clip of r2 values")                
+                r2_seq = record.seq[r2_slices.get('r2')[0]:r2_slices.get('r2')[1]]
 
-            if seq_key in record_r2.values():
-                self.logger.debug("attempt clip of r2 values")
+                if r2_orientation != 'rp':
+                    self.logger.debug("r2 read not in reverse orientation...reverse complementing")
+                    r2_seq=self.reverse_complement(r2_seq)
+                    self.logger.debug("r2 rc sequence starting as...{0}".format(r2_seq[0:25]))
+                
                 r2_tmp_record = SeqRecord.SeqRecord(id=record.id,
-                            seq=record.seq[r2_slices.get('r2')[0]:r2_slices.get('r2')[1]],
+                            seq=str(r2_seq),
                             description=sample_id[0],
                             letter_annotations={'phred_quality' : record.letter_annotations['phred_quality'][r2_slices.get('r2')[0]:r2_slices.get('r2')[1]]})
                 self.logger.debug("r2 unclipped length {0}, clipped length {1}".format(len(record.seq), len(r2_tmp_record.seq)))
                 new_record.setdefault(sample_id[0]+'_r2', []).append(r2_tmp_record)
 
-        self.logger.debug("new_record dict {0}".format(new_record))
+        self.logger.debug("returning {0} modified seqs".format(len(new_record)))
+        
+        
         
         return new_record
     
@@ -365,7 +391,49 @@ class Demultiplex(object):
         
             return "cleared"
             
-    
+    def screen_read_pair_suitability(self, result):
+        '''
+        
+        {
+        'pattern' : search_pattern.pattern,
+        'start_position' : search_match.span()[0],
+        'end_position' : search_match.span()[1],
+        'length' : len(sequence.seq),
+        'index' : strand_key,
+        'orient_key' : orient_key 
+        }
+        
+        {
+        'index': 'r1', 
+        'pattern_found': True, 
+        'orient_key': 'rp', 
+        'pattern': 'ACTGACTGACTAC', 
+        'end_position': 13, 
+        'length': 301, 
+        'start_position': 0
+        }
+        
+        '''
+        
+        normal_combo = set(['fp', 'rp'])
+        rc_combo =set(['fprc', 'rprc'])
+        
+        if result[0].get('index') == 'r1':
+                orientation_set = set([result[0].get('orient_key'), 
+                                      result[1].get('orient_key')])
+        elif result[0].get('index') == 'r2':
+                orientation_set = set([result[1].get('orient_key'),
+                                       result[0].get('orient_key')])
+        
+        if len(set.intersection(normal_combo, orientation_set)) != 2 or\
+           len(set.intersection(rc_combo, orientation_set)) != 2:
+               self.logger.debug("incorrect primer orientations != 2")
+               return "failed"
+        else:
+            self.logger.debug("correct primer orientations == 2")
+            return "proceed"
+        
+        
     def run_demultiplex_and_trim(self, opts, **kwargs):
         
         """
@@ -427,52 +495,55 @@ class Demultiplex(object):
         bar = progressbar.ProgressBar(max_value=(self.r1_tot+self.r2_tot)/4,redirect_stdout=True)
     
         for r1, r2 in itertools.izip(self.R1.itervalues(), self.R2.itervalues()):
-            self.logger.debug("r1 {0}".format(r1))
-            self.logger.debug("r2 {0}".format(r1))
+            #self.logger.debug("r1 {0}".format(r1))
+            #self.logger.debug("r2 {0}".format(r1))
 
             pair_seq_dict = {'r1' : r1, 'r2' : r2}
-            self.logger.debug("pair_seq_dict {0}".format(pair_seq_dict))
+            self.logger.debug("\n")
+            self.logger.debug("processing new pair_seq_dict {0}".format(pair_seq_dict.keys()))
             
-            self.logger.debug("\nprocessing seq ID - R1 {0}... R2 {1}".format(r1.id, r2.id))
-            self.logger.debug("R1 sequence - {0}".format(r1.seq))
-            self.logger.debug("R2 sequence - {0}".format(r2.seq))
+            self.logger.debug("processing seq ID - R1 {0}... R2 {1}".format(r1.id, r2.id))
+            self.logger.debug("R1 sequence - {0}...".format(r1.seq[0:50]))
+            self.logger.debug("R2 sequence - {0}...".format(r2.seq[0:50]))
 
             self.sample_id = ""
             # because we process two sequences at a time (R1 and R2)
             self.processed_seqs += 2
 
-            #self.pair_read = {'r1' : r1, 'r2' :r2}
-            #start_slice = 0
-            #end_slice = -1
             self.f_primer_found = []
             self.r_primer_found = []
             
             self.logger.debug("Looking in pair read for patterns...")
             
             search_result = self.regex_search_through_sequence(pair_seq_dict, self.primer_pattern_dict_list)
-            
-            
             self.logger.debug("search result - {0}".format(search_result))
+            read_pair_proceed = self.screen_read_pair_suitability(search_result)
             
-            try:
-                sample_id = self.get_sample_id_from_primer_sequence(sample_primer_dict, search_result[0].get('pattern'), search_result[1].get('pattern'))
-                self.logger.debug("**R1 ID** {0} & **R2 ID** {1} from sample {2}".format(r1.id, r2.id, sample_id))
-            except IndexError as e:
-                # sample is missing one or both the patterns keys
-                self.logger.debug("Sample seq is missing a pattern, {0}- discarding read".format(e))
-                output = self.record_buffer_and_writer({'discarded' : pair_seq_dict})
-                self.unmapped_count += 2
-                continue
-            try:
-                new_seq = self.clip_primers_from_seq(search_result, self.primer_pattern_dict_list, pair_seq_dict, sample_primer_dict, sample_id)
-                output = self.record_buffer_and_writer(new_seq)
-                self.both_primers_count += 2
-            except Exception as e:
-                self.logger.debug("attempt to clip sequence failed - errmsg - {0} - discarding read".format(e))
-                output = self.record_buffer_and_writer({'discarded' : pair_seq_dict})
-                self.unmapped_count += 2
-                continue
+            self.logger.debug("proceed with read pair ? {0}".format(read_pair_proceed))
             
+            while read_pair_proceed != 'failed':
+                try:
+                    sample_id = self.get_sample_id_from_primer_sequence(sample_primer_dict, 
+                                                                        search_result[0].get('pattern'), 
+                                                                        search_result[1].get('pattern'))
+                    self.logger.debug("- R1 ID -> {0} & R2 ID -> {1} from sample {2}".format(r1.id, r2.id, sample_id))
+                except IndexError as e:
+                    # sample is missing one or both the patterns keys
+                    self.logger.debug("Sample seq is missing a pattern, {0}- discarding read".format(e))
+                    output = self.record_buffer_and_writer({'discarded' : pair_seq_dict})
+                    self.unmapped_count += 2
+                    continue
+                try:
+                    new_seq = self.clip_primers_from_seq(search_result, self.primer_pattern_dict_list, pair_seq_dict, sample_primer_dict, sample_id)
+                    self.logger.debug("clipped read returned...{0} seqs".format(len(new_seq)))
+                    output = self.record_buffer_and_writer(new_seq)
+                    self.both_primers_count += 2
+                except Exception as e:
+                    self.logger.debug("attempt to clip sequence failed - errmsg - {0} - discarding read {1}".format(e, output))
+                    output = self.record_buffer_and_writer({'discarded' : pair_seq_dict})
+                    self.unmapped_count += 2
+                    continue
+                
             #output = self.record_buffer_and_writer(new_seq)
             bar.update(self.processed_seqs)
             
@@ -584,7 +655,7 @@ class Demultiplex(object):
         rectified_f_primer = self.replace_ambiguous_pattern_with_iupac_base(f_primer_pattern)
         
         rectified_r_primer = self.replace_ambiguous_pattern_with_iupac_base(r_primer_pattern)
-        self.logger.debug("primer converted to F - {0} and R - {1}".format(rectified_f_primer, rectified_r_primer))
+        self.logger.debug("primer ambiguous bps converted to F - {0} and R - {1}".format(rectified_f_primer, rectified_r_primer))
         
         values_set = set()
         
@@ -618,7 +689,7 @@ class Demultiplex(object):
             record = SeqRecord.SeqRecord(id=items.id + 
                                         ":sample_id_" + 
                                         filename,
-                                        seq=items.seq, 
+                                        seq=items.seq,
                                         letter_annotations={'phred_quality' : items.letter_annotations['phred_quality']})
             record_list.append(record)
         
