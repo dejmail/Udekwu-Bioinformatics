@@ -294,13 +294,16 @@ class Demultiplex(object):
             pass  
 
         r1_slices, r2_slices = self.determine_sequence_slices(sample_id, sample_primer_dict, search_result)
-        
-        record_r1_regx_result = search_result[0]
-        record_r2_regx_result = search_result[1]
 
+        if search_result[0].get('index') == 'r1':
+            record_r1_regx_result = search_result[0]
+            record_r2_regx_result = search_result[1]
+        elif search_result[0].get('index') == 'r2':
+            record_r1_regx_result = search_result[1]
+            record_r2_regx_result = search_result[0]
+            
         r1_orientation = record_r1_regx_result.get('orient_key')
         r2_orientation = record_r2_regx_result.get('orient_key')
-        
         
         self.logger.debug("r1 orientation {0}, r2 orientation {1}".format(r1_orientation,
                                                                           r2_orientation))
@@ -315,7 +318,7 @@ class Demultiplex(object):
                 
                 if r1_orientation != 'fp':
                     self.logger.debug("r1 read not in forward orientation...reverse complementing")
-                    r1_seq=self.reverse_complement(r1_seq)
+                    r1_seq=self.reverse_complement(str(r1_seq))
                     self.logger.debug("r1 rc sequence starting as...{0}".format(r1_seq[0:25]))
 
                 r1_tmp_record = SeqRecord.SeqRecord(id=record.id,
@@ -334,7 +337,7 @@ class Demultiplex(object):
 
                 if r2_orientation != 'rp':
                     self.logger.debug("r2 read not in reverse orientation...reverse complementing")
-                    r2_seq=self.reverse_complement(r2_seq)
+                    r2_seq=self.reverse_complement(str(r2_seq))
                     self.logger.debug("r2 rc sequence starting as...{0}".format(r2_seq[0:25]))
                 
                 r2_tmp_record = SeqRecord.SeqRecord(id=record.id,
@@ -418,15 +421,23 @@ class Demultiplex(object):
         normal_combo = set(['fp', 'rp'])
         rc_combo =set(['fprc', 'rprc'])
         
-        if result[0].get('index') == 'r1':
-                orientation_set = set([result[0].get('orient_key'), 
-                                      result[1].get('orient_key')])
-        elif result[0].get('index') == 'r2':
-                orientation_set = set([result[1].get('orient_key'),
-                                       result[0].get('orient_key')])
+#        if result[0].get('index') == 'r1':
+#            orientation_set = set([result[0].get('orient_key'), 
+#                                   result[1].get('orient_key')])
+#        elif result[0].get('index') == 'r2':
+        try:
+            orientation_set = set([result[1].get('orient_key'),
+                                   result[0].get('orient_key')])
+        except IndexError as e:
+            self.logger.debug("Too few primer orientations, failing sequence {0}".format(e))
+            return "failed"
         
-        if len(set.intersection(normal_combo, orientation_set)) != 2 or\
-           len(set.intersection(rc_combo, orientation_set)) != 2:
+        if not (len(set.intersection(normal_combo, orientation_set)) == 2 and
+                  not len(set.intersection(rc_combo, orientation_set)) == 2):
+               
+               self.logger.debug("length of set intersection {0}".format(len(set.intersection(normal_combo, orientation_set))))
+               self.logger.debug("length of rc set inersection {0}".format(len(set.intersection(rc_combo, orientation_set))))
+               
                self.logger.debug("incorrect primer orientations != 2")
                return "failed"
         else:
@@ -492,6 +503,7 @@ class Demultiplex(object):
                         
         self.logger.debug("sample_primer_dict...{0}".format("\n".join(x) for x in sample_primer_dict.items()))
         self.logger.info("Starting demultiplex process...")
+        
         bar = progressbar.ProgressBar(max_value=(self.r1_tot+self.r2_tot)/4,redirect_stdout=True)
     
         for r1, r2 in itertools.izip(self.R1.itervalues(), self.R2.itervalues()):
@@ -499,8 +511,8 @@ class Demultiplex(object):
             #self.logger.debug("r2 {0}".format(r1))
 
             pair_seq_dict = {'r1' : r1, 'r2' : r2}
-            self.logger.debug("\n")
-            self.logger.debug("processing new pair_seq_dict {0}".format(pair_seq_dict.keys()))
+            self.logger.debug("new read pair\n")
+            self.logger.debug("processing new read pair {0}".format(pair_seq_dict.keys()))
             
             self.logger.debug("processing seq ID - R1 {0}... R2 {1}".format(r1.id, r2.id))
             self.logger.debug("R1 sequence - {0}...".format(r1.seq[0:50]))
@@ -516,12 +528,19 @@ class Demultiplex(object):
             self.logger.debug("Looking in pair read for patterns...")
             
             search_result = self.regex_search_through_sequence(pair_seq_dict, self.primer_pattern_dict_list)
-            self.logger.debug("search result - {0}".format(search_result))
+            try:
+                if len(search_result) > 1:
+                    self.logger.debug("search result - {0}".format(search_result[0]))
+                    self.logger.debug("search result - {0}".format(search_result[1]))
+            except IndexError as e:
+                self.logger.debug("search result - {0}".format(search_result))
+                self.logger.debug("error in list index {0}".format(e))
+                
             read_pair_proceed = self.screen_read_pair_suitability(search_result)
             
             self.logger.debug("proceed with read pair ? {0}".format(read_pair_proceed))
             
-            while read_pair_proceed != 'failed':
+            if read_pair_proceed != 'failed':
                 try:
                     sample_id = self.get_sample_id_from_primer_sequence(sample_primer_dict, 
                                                                         search_result[0].get('pattern'), 
@@ -544,13 +563,15 @@ class Demultiplex(object):
                     self.unmapped_count += 2
                     continue
                 
-            #output = self.record_buffer_and_writer(new_seq)
-            bar.update(self.processed_seqs)
+                #output = self.record_buffer_and_writer(new_seq)
             
-            if output == "cleared":
-                self.record_buffer = {}
-                self.logger.debug("buffer check {0}".format(self.record_buffer))
+                bar.update(self.processed_seqs) 
+                
+                if output == "cleared":
+                    self.record_buffer = {}
+                    self.logger.debug("buffer check {0}".format(self.record_buffer))
 
+            
 
         #if r1[-1]:
         #    output = self.record_buffer_and_writer(new_seq)
