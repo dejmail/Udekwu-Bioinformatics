@@ -571,6 +571,9 @@ class Demultiplex(object):
                     self.record_buffer = {}
                     self.logger.debug("buffer check {0}".format(self.record_buffer))
 
+            elif read_pair_proceed == 'failed':
+                self.unmapped_count += 2
+                bar.update(self.processed_seqs) 
             
 
         #if r1[-1]:
@@ -750,7 +753,7 @@ def check_if_path_exists(path):
             print("Path was found - {0}".format(path))
             return True
         else:
-            print("{0} NOT found, creating output directory".format(path))
+            print("directory {0} NOT found, creating directory".format(path))
             try:
                 os.makedirs(path)
                 return True
