@@ -573,6 +573,7 @@ class Demultiplex(object):
 
             elif read_pair_proceed == 'failed':
                 self.unmapped_count += 2
+                output = self.record_buffer_and_writer({'discarded' : pair_seq_dict})
                 bar.update(self.processed_seqs) 
             
 
