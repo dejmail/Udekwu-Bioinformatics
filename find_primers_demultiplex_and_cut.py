@@ -322,19 +322,20 @@ class Demultiplex(object):
                 
                 self.logger.debug("attempt clip of r1 values - seq and qual")
                 r1_seq = record.seq[r1_slices.get('r1')[0]:r1_slices.get('r1')[1]]
-                r1_quality_scores={'phred_quality' : record.letter_annotations['phred_quality'][r1_slices.get('r1')[0]:r1_slices.get('r1')[1]]}
-                self.logger.debug("r1 seq clipped...{0}".format(r1_seq[0:25]))
+                r1_quality_scores=record.letter_annotations.get('phred_quality')[r1_slices.get('r1')[0]:r1_slices.get('r1')[1]]
+                self.logger.debug("r1 seq clipped...{0} - r1 qual clipped...{1}".format(r1_seq[0:15], r1_quality_scores[0:10]))
                 
                 if r1_orientation != 'fp':
                     self.logger.debug("r1 read not in forward orientation...reverse complementing")
                     r1_seq=self.reverse_complement(str(r1_seq))
-                    r1_quality_scores={'letter_annotations' : r1_quality_scores.get('phred_quality')[::-1]}
+                    r1_quality_scores=r1_quality_scores[::-1]
                     self.logger.debug("r1 rc sequence starting as...{0}".format(r1_seq[0:25]))
+                    self.logger.debug("r1 rc quality scores starting as...{0}".format(r1_quality_scores[0:15]))
 
                 r1_tmp_record = SeqRecord.SeqRecord(id=record.id,
                             seq=str(r1_seq),
                             description=sample_id[0],
-                            letter_annotations=r1_quality_scores)
+                            letter_annotations={'phred_quality' : r1_quality_scores})
                 self.logger.debug("r1 unclipped length {0}, clipped length {1}".format(len(record.seq), len(r1_tmp_record.seq)))
                 
                 new_record.setdefault(sample_id[0]+'_r1', []).append(r1_tmp_record)
@@ -344,18 +345,20 @@ class Demultiplex(object):
                 
                 self.logger.debug("attempt clip of r2 values - seq and qual")
                 r2_seq = record.seq[r2_slices.get('r2')[0]:r2_slices.get('r2')[1]]
-                r2_quality_scores={'phred_quality' : record.letter_annotations['phred_quality'][r2_slices.get('r2')[0]:r2_slices.get('r2')[1]]}
+                r2_quality_scores=record.letter_annotations.get('phred_quality')[r2_slices.get('r2')[0]:r2_slices.get('r2')[1]]
+                self.logger.debug("r2 seq clipped...{0} - r2 qual clipped...{1}".format(r2_seq[0:15], r2_quality_scores[0:10]))
 
                 if r2_orientation != 'rp':
                     self.logger.debug("r2 read not in reverse orientation...reverse complementing")
                     r2_seq=self.reverse_complement(str(r2_seq))
-                    r2_quality_scores={'letter_annotations' : r2_quality_scores.get('phred_quality')[::-1]}
+                    r2_quality_scores=r2_quality_scores[::-1]
                     self.logger.debug("r2 rc sequence starting as...{0}".format(r2_seq[0:25]))
+                    self.logger.debug("r2 rc quality scores starting as...{0}".format(r2_quality_scores[0:15]))
                 
                 r2_tmp_record = SeqRecord.SeqRecord(id=record.id,
                             seq=str(r2_seq),
                             description=sample_id[0],
-                            letter_annotations=r2_quality_scores)
+                            letter_annotations={'phred_quality' : r2_quality_scores})
                 self.logger.debug("r2 unclipped length {0}, clipped length {1}".format(len(record.seq), len(r2_tmp_record.seq)))
                 new_record.setdefault(sample_id[0]+'_r2', []).append(r2_tmp_record)
 
@@ -395,6 +398,7 @@ class Demultiplex(object):
                                     SeqIO.write(handle=output, sequences=individual_records, format='fastq')
                                 except ValueError as e:
                                     self.logger.fatal("{0}".format(e))
+                                    self.logger.fatal("{0}".format(individual_records.seq))
                                     raise ("problem writing to file, check record and SeqIO object")
                                 
                 if pair_key == 'discarded':
@@ -455,10 +459,10 @@ class Demultiplex(object):
                self.logger.debug("length of set intersection {0}".format(len(set.intersection(normal_combo, orientation_set))))
                self.logger.debug("length of rc set inersection {0}".format(len(set.intersection(rc_combo, orientation_set))))
                
-               self.logger.debug("incorrect primer orientations != 2")
+               self.logger.debug("unaccepted primer orientations != 2")
                return "failed"
         else:
-            self.logger.debug("correct primer orientations == 2")
+            self.logger.debug("accepted primer orientations == 2")
             return "proceed"
         
     
@@ -715,7 +719,7 @@ class Demultiplex(object):
                 
         return list(values_set)
         
-    
+    # this is not being used
     def return_fastq_seqio_object(self, data, filename):
     
         '''Construct Biopython SeqIO object for each of the fastq reads
