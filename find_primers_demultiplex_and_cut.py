@@ -23,9 +23,12 @@ from Bio.Alphabet import IUPAC, generic_dna
 from qiime.check_id_map import process_id_map
 import subprocess
 
+import line_profiler
+
 import progressbar
 
 class Demultiplex(object):
+    
     
     def __init__(self, opts, logger=None):
         """
@@ -57,7 +60,8 @@ class Demultiplex(object):
         self.R1, self.r1_tot, self.R2, self.r2_tot = self.index_sequence_files([self.r1_filename, self.r2_filename])
         self.starting_total = (self.r1_tot + self.r2_tot)/4
         self.buffer_limit = 5000
-                
+    
+    
     def number_of_lines_in_file(self, filename):
         
         import logging
@@ -69,7 +73,7 @@ class Demultiplex(object):
         self.logger.debug("{0} has {1} lines".format(filename, str(i+1)))
         return i + 1
         
-
+    
     def index_sequence_files(self, filenames):
         
         import logging
@@ -90,7 +94,7 @@ class Demultiplex(object):
             raise IOError("Can't find R1 or R2 in filenames")
             return None    
                 
-                
+    
     def create_primer_regex_patterns(self, header, mapping_data):
         
         """ Returns lists of forward/reverse primer regular expression
@@ -150,13 +154,15 @@ class Demultiplex(object):
             reverse_primers_rc.append(compile(''.join([self.iupac[symbol] for symbol in self.reverse_complement(curr_primer[:self.search_length])])))
             
         return forward_primers, forward_primers_rc, reverse_primers, reverse_primers_rc
-            
+    
+                
     def reverse_complement(self, sequence):
     
         rc_sequence = Seq(sequence, IUPAC.ambiguous_dna)
     
         return rc_sequence.reverse_complement()
-        
+    
+    
     def determine_sequence_slices(self, sample_id, sample_primer_dict, search_result):
         
         '''Determine the coordinates where each sequence needs to be clipped 
@@ -231,6 +237,7 @@ class Demultiplex(object):
             self.logger.error("Error with slice determination...{0}...{1}".format(search_result, e))
             return "Error with slice determination"
     
+    
     def regex_search_through_sequence(self, search_dict, regex_dict):
         
         ''' Takes in a regex pattern dictionary-list, and using the list values
@@ -280,6 +287,7 @@ class Demultiplex(object):
                                         'index' : strand_key})
 
         return pair_result
+    
 
     def clip_primers_from_seq(self, search_result, primer_dict, pair_seq_dict, sample_primer_dict, sample_id):
         
@@ -312,19 +320,21 @@ class Demultiplex(object):
             
             if seq_key in record_r1_regx_result.values():       
                 
-                self.logger.debug("attempt clip of r1 values")
+                self.logger.debug("attempt clip of r1 values - seq and qual")
                 r1_seq = record.seq[r1_slices.get('r1')[0]:r1_slices.get('r1')[1]]
+                r1_quality_scores={'phred_quality' : record.letter_annotations['phred_quality'][r1_slices.get('r1')[0]:r1_slices.get('r1')[1]]}
                 self.logger.debug("r1 seq clipped...{0}".format(r1_seq[0:25]))
                 
                 if r1_orientation != 'fp':
                     self.logger.debug("r1 read not in forward orientation...reverse complementing")
                     r1_seq=self.reverse_complement(str(r1_seq))
+                    r1_quality_scores={'letter_annotations' : r1_quality_scores.get('phred_quality')[::-1]}
                     self.logger.debug("r1 rc sequence starting as...{0}".format(r1_seq[0:25]))
 
                 r1_tmp_record = SeqRecord.SeqRecord(id=record.id,
                             seq=str(r1_seq),
                             description=sample_id[0],
-                            letter_annotations={'phred_quality' : record.letter_annotations['phred_quality'][r1_slices.get('r1')[0]:r1_slices.get('r1')[1]]})
+                            letter_annotations=r1_quality_scores)
                 self.logger.debug("r1 unclipped length {0}, clipped length {1}".format(len(record.seq), len(r1_tmp_record.seq)))
                 
                 new_record.setdefault(sample_id[0]+'_r1', []).append(r1_tmp_record)
@@ -332,18 +342,20 @@ class Demultiplex(object):
                 
             if seq_key in record_r2_regx_result.values():
                 
-                self.logger.debug("attempt clip of r2 values")                
+                self.logger.debug("attempt clip of r2 values - seq and qual")
                 r2_seq = record.seq[r2_slices.get('r2')[0]:r2_slices.get('r2')[1]]
+                r2_quality_scores={'phred_quality' : record.letter_annotations['phred_quality'][r2_slices.get('r2')[0]:r2_slices.get('r2')[1]]}
 
                 if r2_orientation != 'rp':
                     self.logger.debug("r2 read not in reverse orientation...reverse complementing")
                     r2_seq=self.reverse_complement(str(r2_seq))
+                    r2_quality_scores={'letter_annotations' : r2_quality_scores.get('phred_quality')[::-1]}
                     self.logger.debug("r2 rc sequence starting as...{0}".format(r2_seq[0:25]))
                 
                 r2_tmp_record = SeqRecord.SeqRecord(id=record.id,
                             seq=str(r2_seq),
                             description=sample_id[0],
-                            letter_annotations={'phred_quality' : record.letter_annotations['phred_quality'][r2_slices.get('r2')[0]:r2_slices.get('r2')[1]]})
+                            letter_annotations=r2_quality_scores)
                 self.logger.debug("r2 unclipped length {0}, clipped length {1}".format(len(record.seq), len(r2_tmp_record.seq)))
                 new_record.setdefault(sample_id[0]+'_r2', []).append(r2_tmp_record)
 
@@ -352,7 +364,7 @@ class Demultiplex(object):
         
         
         return new_record
-    
+
     def record_buffer_and_writer(self, record_dict):
         
         import logging
@@ -379,7 +391,11 @@ class Demultiplex(object):
                         for individual_records in sample_entries:
                             filename = os.path.join(self.output_dir, pair_key + ".fq")
                             with open(filename, "a") as output:
-                                SeqIO.write(handle=output, sequences=individual_records, format='fastq')
+                                try:
+                                    SeqIO.write(handle=output, sequences=individual_records, format='fastq')
+                                except ValueError as e:
+                                    self.logger.fatal("{0}".format(e))
+                                    raise ("problem writing to file, check record and SeqIO object")
                                 
                 if pair_key == 'discarded':
                     self.logger.debug("writing {0} discarded records to disk".format(len(record)))
@@ -394,6 +410,7 @@ class Demultiplex(object):
         
             return "cleared"
             
+    
     def screen_read_pair_suitability(self, result):
         '''
         
@@ -444,7 +461,7 @@ class Demultiplex(object):
             self.logger.debug("correct primer orientations == 2")
             return "proceed"
         
-        
+    
     def run_demultiplex_and_trim(self, opts, **kwargs):
         
         """
@@ -562,8 +579,6 @@ class Demultiplex(object):
                     output = self.record_buffer_and_writer({'discarded' : pair_seq_dict})
                     self.unmapped_count += 2
                     continue
-                
-                #output = self.record_buffer_and_writer(new_seq)
             
                 bar.update(self.processed_seqs) 
                 
@@ -575,10 +590,6 @@ class Demultiplex(object):
                 self.unmapped_count += 2
                 output = self.record_buffer_and_writer({'discarded' : pair_seq_dict})
                 bar.update(self.processed_seqs) 
-            
-
-        #if r1[-1]:
-        #    output = self.record_buffer_and_writer(new_seq)
         
         self.logger.info("__________________________")
         self.logger.info("Samples successfully mapped (F+R found): {0}".format(self.both_primers_count))
@@ -586,7 +597,8 @@ class Demultiplex(object):
         self.logger.info("Total sequences checked: {0}".format(self.processed_seqs))
     
         self.logger.info("Run finished")
-     
+        
+    
     def check_metadata_file_formatting(self, metafile):
     
         command = ("validate_mapping_file.py -m {0}".format(metafile))
@@ -595,6 +607,7 @@ class Demultiplex(object):
         
         return (output,err)
     
+    
     def process_metadata_file(self, metafile):
     
         try:
@@ -602,7 +615,8 @@ class Demultiplex(object):
             self.logger.debug("processed ok - {0}".format(output[0]))
         except IOError as e:
             self.logger.critical("The metadata file does not exist or the path is wrong - error {0}".format(e)) 
-
+    
+    
     def invert_regex_pattern(self, sample_primer_dict):
         
         
@@ -619,7 +633,8 @@ class Demultiplex(object):
             if len(values) > 1:
                 inverted_dict.update({values: keys})
         return inverted_dict
-        
+    
+    
     def replace_ambiguous_pattern_with_iupac_base(self, sequence):
         
         '''    
@@ -645,6 +660,7 @@ class Demultiplex(object):
                 continue
         return str(sequence) 
     
+    
     def reverse_complement_reverse_primer(self, sequence):
         '''
             Simply returns a reverse complement of the sequence that comes
@@ -658,7 +674,8 @@ class Demultiplex(object):
         rc_sequence = Seq(sequence, IUPAC.ambiguous_dna)
         
         return rc_sequence.reverse_complement()
-            
+    
+    
     def get_sample_id_from_primer_sequence(self, sample_id_primer_dict, f_primer_pattern, r_primer_pattern):
         
         '''
@@ -698,7 +715,7 @@ class Demultiplex(object):
                 
         return list(values_set)
         
-
+    
     def return_fastq_seqio_object(self, data, filename):
     
         '''Construct Biopython SeqIO object for each of the fastq reads
@@ -719,7 +736,8 @@ class Demultiplex(object):
             record_list.append(record)
         
         return record_list
-        
+    
+    
     def setup_logging(self, default_path='logging.yaml',
                   default_level=logging.DEBUG,
                   env_key='LOG_CFG'):
