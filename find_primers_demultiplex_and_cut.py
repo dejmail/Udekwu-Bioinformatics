@@ -23,8 +23,6 @@ from Bio.Alphabet import IUPAC, generic_dna
 from qiime.check_id_map import process_id_map
 import subprocess
 
-import line_profiler
-
 import progressbar
 
 class Demultiplex(object):
