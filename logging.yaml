@@ -16,7 +16,7 @@ handlers:
         class: logging.handlers.RotatingFileHandler
         level: DEBUG
         formatter: simple
-        filename: info_5000.log
+        filename: info.log
         maxBytes: 10485760 # 10MB
         backupCount: 20
         encoding: utf8
@@ -25,7 +25,7 @@ handlers:
         class: logging.handlers.RotatingFileHandler
         level: ERROR
         formatter: simple
-        filename: errors_5000.log
+        filename: errors.log
         maxBytes: 10485760 # 10MB
         backupCount: 20
         encoding: utf8
