@@ -362,9 +362,56 @@ class Demultiplex(object):
 
         self.logger.debug("returning {0} modified seqs".format(len(new_record)))
         
-        
-        
         return new_record
+
+    def correct_orientation_of_reads(self, result_dict):
+        
+        '''
+        
+        The result dictionary coming in comes as a list of two dictionary
+        items, hopefully with one r1 and one r2 read. The reads may not be
+        in the r1=fp r2=rp orientation. It may be the reverse of that which
+        is not helpful and needs to be reversed. Therefore we check for that
+        and reverse the variables if need be.
+        
+        [
+        {'pattern_found' : True, 
+         'pattern' : search_pattern.pattern,
+         'start_position' : search_match.span()[0],
+         'end_position' : search_match.span()[1],
+         'length' : len(sequence.seq),
+         'index' : strand_key,
+         'orient_key' : orient_key},
+        {'pattern_found' : True, 
+         'pattern' : search_pattern.pattern,
+         'start_position' : search_match.span()[0],
+         'end_position' : search_match.span()[1],
+         'length' : len(sequence.seq),
+         'index' : strand_key,
+         'orient_key' : orient_key}
+        ]
+        
+        '''
+        
+        self.logger = logging.getLogger('_corort_')
+        
+        if len(result_dict) == 2:
+            orientation = {result_dict[0].get('index'): 
+                            result_dict[0].get('orient_key'),
+                           result_dict[1].get('index') :
+                           result_dict[1].get('orient_key')}
+            
+            if not orientation.get('r1') == 'fp' and not orientation.get('r2') == 'rp':
+                self.logger.debug("read is in alternate orientation, swapping around")
+                
+                result_dict[0]['index'], result_dict[1]['index'] = \
+                           result_dict[1]['index'], result_dict[0]['index']
+                                  
+                return result_dict
+        else:
+            return "too many results in result dictionary"
+              
+
 
     def record_buffer_and_writer(self, record_dict):
         
@@ -411,7 +458,7 @@ class Demultiplex(object):
             buffer_count=None
         
             return "cleared"
-            
+    
     
     def screen_read_pair_suitability(self, result):
         '''
@@ -547,6 +594,9 @@ class Demultiplex(object):
             self.logger.debug("Looking in pair read for patterns...")
             
             search_result = self.regex_search_through_sequence(pair_seq_dict, self.primer_pattern_dict_list)
+            
+            self.logger.debug(self.correct_orientation_of_reads(search_result))           
+            
             try:
                 if len(search_result) > 1:
                     self.logger.debug("search result - {0}".format(search_result[0]))
