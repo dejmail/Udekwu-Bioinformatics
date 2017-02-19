@@ -408,8 +408,11 @@ class Demultiplex(object):
                            result_dict[1]['index'], result_dict[0]['index']
                                   
                 return result_dict
+            else:
+                return result_dict
+            
         else:
-            return "too many results in result dictionary"
+            return result_dict
               
 
 
@@ -497,6 +500,8 @@ class Demultiplex(object):
         except IndexError as e:
             self.logger.debug("Too few primer orientations, failing sequence {0}".format(e))
             return "failed"
+        except TypeError as e:
+            self.logger.debug("Result is an integer")
         
         if not (len(set.intersection(normal_combo, orientation_set)) == 2 and
                   not len(set.intersection(rc_combo, orientation_set)) == 2):
@@ -594,17 +599,19 @@ class Demultiplex(object):
             self.logger.debug("Looking in pair read for patterns...")
             
             search_result = self.regex_search_through_sequence(pair_seq_dict, self.primer_pattern_dict_list)
-            
-            self.logger.debug(self.correct_orientation_of_reads(search_result))           
+            self.logger.debug("pre read correction search_result - {0}".format(search_result))
+            search_result = self.correct_orientation_of_reads(search_result)
+            self.logger.debug("post read correction search_result - {0}".format(search_result))
             
             try:
-                if len(search_result) > 1:
+                if type(search_result) == list and len(search_result) > 1:
                     self.logger.debug("search result - {0}".format(search_result[0]))
                     self.logger.debug("search result - {0}".format(search_result[1]))
             except IndexError as e:
                 self.logger.debug("search result - {0}".format(search_result))
                 self.logger.debug("error in list index {0}".format(e))
-                
+            
+            
             read_pair_proceed = self.screen_read_pair_suitability(search_result)
             
             self.logger.debug("proceed with read pair ? {0}".format(read_pair_proceed))
