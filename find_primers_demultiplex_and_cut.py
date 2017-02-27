@@ -43,6 +43,7 @@ class Demultiplex(object):
         self.quality_errors = 0
         self.unmapped_count = 0
         self.processed_seqs = 0
+        self.alternate_orientation = []
         
         self.record_buffer = {}
         self.iupac = {'A': 'A', 'T': 'T', 'G': 'G', 'C': 'C', \
@@ -324,6 +325,7 @@ class Demultiplex(object):
                 self.logger.debug("r1 seq clipped...{0} - r1 qual clipped...{1}".format(r1_seq[0:15], r1_quality_scores[0:10]))
                 
                 if r1_orientation != 'fp':
+                    self.alternate_orientation.append(record.id)
                     self.logger.debug("r1 read not in forward orientation...reverse complementing")
                     r1_seq=self.reverse_complement(str(r1_seq))
                     r1_quality_scores=r1_quality_scores[::-1]
@@ -599,9 +601,9 @@ class Demultiplex(object):
             self.logger.debug("Looking in pair read for patterns...")
             
             search_result = self.regex_search_through_sequence(pair_seq_dict, self.primer_pattern_dict_list)
-            self.logger.debug("pre read correction search_result - {0}".format(search_result))
-            search_result = self.correct_orientation_of_reads(search_result)
-            self.logger.debug("post read correction search_result - {0}".format(search_result))
+            #self.logger.debug("pre read correction search_result - {0}".format(search_result))
+            #search_result = self.correct_orientation_of_reads(search_result)
+            #self.logger.debug("post read correction search_result - {0}".format(search_result))
             
             try:
                 if type(search_result) == list and len(search_result) > 1:
@@ -652,6 +654,7 @@ class Demultiplex(object):
         
         self.logger.info("__________________________")
         self.logger.info("Samples successfully mapped (F+R found): {0}".format(self.both_primers_count))
+        self.logger.info("Read pairs in alternate orientation - {0}".format(str(len(self.alternate_orientation))))
         self.logger.info("Sequences not mapped: {0}".format(self.unmapped_count))
         self.logger.info("Total sequences checked: {0}".format(self.processed_seqs))
     
