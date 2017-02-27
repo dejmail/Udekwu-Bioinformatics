@@ -658,6 +658,12 @@ class Demultiplex(object):
         self.logger.info("Sequences not mapped: {0}".format(self.unmapped_count))
         self.logger.info("Total sequences checked: {0}".format(self.processed_seqs))
     
+        with open("alternate_orientation_records.txt", 'w') as f:
+            for sequence_id in self.alternate_orientation:
+                sequence_id = sequence_id + " " + "\n"
+                f.write(sequence_id)
+            
+    
         self.logger.info("Run finished")
         
     
