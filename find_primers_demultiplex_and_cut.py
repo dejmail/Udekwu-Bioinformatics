@@ -301,7 +301,9 @@ class Demultiplex(object):
             pass  
 
         r1_slices, r2_slices = self.determine_sequence_slices(sample_id, sample_primer_dict, search_result)
-
+        
+        sample_id = sample_id[0]
+        
         if search_result[0].get('index') == 'r1':
             record_r1_regx_result = search_result[0]
             record_r2_regx_result = search_result[1]
@@ -325,20 +327,20 @@ class Demultiplex(object):
                 self.logger.debug("r1 seq clipped...{0} - r1 qual clipped...{1}".format(r1_seq[0:15], r1_quality_scores[0:10]))
                 
                 if r1_orientation != 'fp':
-                    self.alternate_orientation.append(record.id)
-                    self.logger.debug("r1 read not in forward orientation...reverse complementing")
-                    r1_seq=self.reverse_complement(str(r1_seq))
-                    r1_quality_scores=r1_quality_scores[::-1]
-                    self.logger.debug("r1 rc sequence starting as...{0}".format(r1_seq[0:25]))
-                    self.logger.debug("r1 rc quality scores starting as...{0}".format(r1_quality_scores[0:15]))
+                    self.alternate_orientation.append([record.id, "\t", sample_id,"\n"])
+                #    self.logger.debug("r1 read not in forward orientation...reverse complementing")
+                #    r1_seq=self.reverse_complement(str(r1_seq))
+                #    r1_quality_scores=r1_quality_scores[::-1]
+                #    self.logger.debug("r1 rc sequence starting as...{0}".format(r1_seq[0:25]))
+                #    self.logger.debug("r1 rc quality scores starting as...{0}".format(r1_quality_scores[0:15]))
 
                 r1_tmp_record = SeqRecord.SeqRecord(id=record.id,
                             seq=str(r1_seq),
-                            description=sample_id[0],
+                            description=sample_id,
                             letter_annotations={'phred_quality' : r1_quality_scores})
                 self.logger.debug("r1 unclipped length {0}, clipped length {1}".format(len(record.seq), len(r1_tmp_record.seq)))
                 
-                new_record.setdefault(sample_id[0]+'_r1', []).append(r1_tmp_record)
+                new_record.setdefault(sample_id +'_r1', []).append(r1_tmp_record)
                 self.logger.debug("clipped r1_tmp_record seq...{0}".format(r1_tmp_record.seq[0:25]))
                 
             if seq_key in record_r2_regx_result.values():
@@ -348,19 +350,19 @@ class Demultiplex(object):
                 r2_quality_scores=record.letter_annotations.get('phred_quality')[r2_slices.get('r2')[0]:r2_slices.get('r2')[1]]
                 self.logger.debug("r2 seq clipped...{0} - r2 qual clipped...{1}".format(r2_seq[0:15], r2_quality_scores[0:10]))
 
-                if r2_orientation != 'rp':
-                    self.logger.debug("r2 read not in reverse orientation...reverse complementing")
-                    r2_seq=self.reverse_complement(str(r2_seq))
-                    r2_quality_scores=r2_quality_scores[::-1]
-                    self.logger.debug("r2 rc sequence starting as...{0}".format(r2_seq[0:25]))
-                    self.logger.debug("r2 rc quality scores starting as...{0}".format(r2_quality_scores[0:15]))
+                #if r2_orientation != 'rp':
+                #    self.logger.debug("r2 read not in reverse orientation...reverse complementing")
+                #    r2_seq=self.reverse_complement(str(r2_seq))
+                #    r2_quality_scores=r2_quality_scores[::-1]
+                #    self.logger.debug("r2 rc sequence starting as...{0}".format(r2_seq[0:25]))
+                #    self.logger.debug("r2 rc quality scores starting as...{0}".format(r2_quality_scores[0:15]))
                 
                 r2_tmp_record = SeqRecord.SeqRecord(id=record.id,
                             seq=str(r2_seq),
-                            description=sample_id[0],
+                            description=sample_id,
                             letter_annotations={'phred_quality' : r2_quality_scores})
                 self.logger.debug("r2 unclipped length {0}, clipped length {1}".format(len(record.seq), len(r2_tmp_record.seq)))
-                new_record.setdefault(sample_id[0]+'_r2', []).append(r2_tmp_record)
+                new_record.setdefault(sample_id +'_r2', []).append(r2_tmp_record)
 
         self.logger.debug("returning {0} modified seqs".format(len(new_record)))
         
@@ -658,11 +660,11 @@ class Demultiplex(object):
         self.logger.info("Sequences not mapped: {0}".format(self.unmapped_count))
         self.logger.info("Total sequences checked: {0}".format(self.processed_seqs))
     
+        self.logger.info("writing alternate record IDs...")
         with open("alternate_orientation_records.txt", 'w') as f:
             for sequence_id in self.alternate_orientation:
-                sequence_id = sequence_id + " " + "\n"
-                f.write(sequence_id)
-            
+                output_id = ''.join(sequence_id)
+                f.write(output_id)            
     
         self.logger.info("Run finished")
         
