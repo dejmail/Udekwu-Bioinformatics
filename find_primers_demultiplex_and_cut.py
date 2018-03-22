@@ -638,8 +638,8 @@ class Demultiplex(object):
                     output = self.record_buffer_and_writer(new_seq)
                     self.both_primers_count += 2
                 except Exception as e:
-                    self.logger.debug("attempt to clip sequence failed - errmsg - {0} - discarding read {1}".format(e, output))
                     output = self.record_buffer_and_writer({'discarded' : pair_seq_dict})
+                    self.logger.debug("attempt to clip sequence failed - errmsg - {0} - discarding read {1}".format(e, output))
                     self.unmapped_count += 2
                     continue
             
